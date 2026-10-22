@@ -1,0 +1,841 @@
+"""Tkinter desktop interface for the local YOWD delivery prototype.
+
+The interface only calls the public application service. Business decisions and
+persistence stay in that service, so changing a screen cannot bypass validation.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, time, timedelta
+import tkinter as tk
+from tkinter import messagebox, ttk
+from typing import Any, Callable
+
+
+DATE_FORMAT = "%Y-%m-%d %H:%M"
+EXPECTED_ERRORS = (ValueError, RuntimeError, OSError)
+
+
+def _parse_datetime(value: str) -> datetime:
+    try:
+        return datetime.strptime(value.strip(), DATE_FORMAT)
+    except ValueError as error:
+        raise ValueError("Enter the date and time as YYYY-MM-DD HH:MM.") from error
+
+
+def _parse_date(value: str) -> date:
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError as error:
+        raise ValueError("Enter the date as YYYY-MM-DD.") from error
+
+
+def _tomorrow(hour: int) -> str:
+    day = date.today() + timedelta(days=1)
+    return datetime.combine(day, time(hour)).strftime(DATE_FORMAT)
+
+
+def _display(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+class FormDialog(tk.Toplevel):
+    """Small editable form that remains open when validation fails."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        title: str,
+        fields: list[tuple[str, str, str]],
+        submit: Callable[[dict[str, str]], None],
+        *,
+        explanation: str = "",
+        choices: dict[str, list[str]] | None = None,
+        button_text: str = "Save",
+    ) -> None:
+        super().__init__(parent)
+        self.title(title)
+        self.transient(parent)
+        self.resizable(True, False)
+        self.variables: dict[str, tk.StringVar] = {}
+        self.columnconfigure(0, weight=1)
+        body = ttk.Frame(self, padding=20)
+        body.grid(sticky="nsew")
+        body.columnconfigure(1, weight=1)
+        row = 0
+        if explanation:
+            ttk.Label(body, text=explanation, wraplength=490).grid(
+                row=row, column=0, columnspan=2, sticky="w", pady=(0, 15)
+            )
+            row += 1
+        first_widget: tk.Widget | None = None
+        for key, label, initial in fields:
+            ttk.Label(body, text=label).grid(
+                row=row, column=0, sticky="w", padx=(0, 16), pady=6
+            )
+            variable = tk.StringVar(self, initial)
+            self.variables[key] = variable
+            if choices and key in choices:
+                widget: tk.Widget = ttk.Combobox(
+                    body,
+                    textvariable=variable,
+                    values=choices[key],
+                    state="readonly",
+                    width=45,
+                )
+            else:
+                widget = ttk.Entry(body, textvariable=variable, width=45)
+            widget.grid(row=row, column=1, sticky="ew", pady=6)
+            if first_widget is None:
+                first_widget = widget
+            row += 1
+        self.error = tk.StringVar(self)
+        ttk.Label(
+            body,
+            textvariable=self.error,
+            foreground="#a32121",
+            wraplength=490,
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        buttons = ttk.Frame(body)
+        buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(15, 0))
+        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(
+            side="left", padx=(0, 8)
+        )
+
+        def save() -> None:
+            values = {key: variable.get().strip() for key, variable in self.variables.items()}
+            try:
+                submit(values)
+            except EXPECTED_ERRORS as error:
+                self.error.set(str(error))
+                return
+            self.destroy()
+
+        ttk.Button(buttons, text=button_text, command=save).pack(side="left")
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.update_idletasks()
+        self.minsize(550, self.winfo_reqheight())
+        self.grab_set()
+        if first_widget is not None:
+            first_widget.focus_set()
+
+
+class NewRequestDialog(tk.Toplevel):
+    """Collect a request and one or more parcels before saving anything."""
+
+    PARCEL_FIELDS = (
+        ("description", "Description"),
+        ("weight_kg", "Weight (kg)"),
+        ("length_cm", "Length (cm)"),
+        ("width_cm", "Width (cm)"),
+        ("height_cm", "Height (cm)"),
+    )
+
+    def __init__(self, owner: "MainWindow") -> None:
+        super().__init__(owner.root)
+        self.owner = owner
+        self.title("New delivery request")
+        self.transient(owner.root)
+        self.geometry("850x700")
+        self.minsize(760, 630)
+        self.parcels: list[dict[str, str]] = []
+        self.customer_variables: dict[str, tk.StringVar] = {}
+        self.parcel_variables: dict[str, tk.StringVar] = {}
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        body = ttk.Frame(self, padding=20)
+        body.grid(sticky="nsew")
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(8, weight=1)
+        ttk.Label(body, text="Customer and delivery", style="Section.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 12)
+        )
+        fields = (
+            ("customer_name", "Customer name"),
+            ("email", "Email"),
+            ("phone", "Phone"),
+            ("pickup", "Pickup suburb"),
+            ("destination", "Destination suburb"),
+        )
+        for row, (key, label) in enumerate(fields, start=1):
+            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=4)
+            variable = tk.StringVar(self)
+            self.customer_variables[key] = variable
+            ttk.Entry(body, textvariable=variable).grid(
+                row=row, column=1, sticky="ew", pady=4, padx=(12, 0)
+            )
+        ttk.Label(body, text="Parcels", style="Section.TLabel").grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(18, 8)
+        )
+        editor = ttk.Frame(body)
+        editor.grid(row=7, column=0, columnspan=2, sticky="ew")
+        for column, (key, label) in enumerate(self.PARCEL_FIELDS):
+            editor.columnconfigure(column, weight=3 if column == 0 else 1)
+            ttk.Label(editor, text=label).grid(
+                row=0, column=column, sticky="w", padx=(0, 8)
+            )
+            variable = tk.StringVar(self)
+            self.parcel_variables[key] = variable
+            ttk.Entry(editor, textvariable=variable, width=10).grid(
+                row=1, column=column, sticky="ew", padx=(0, 8), pady=(4, 8)
+            )
+        ttk.Button(editor, text="Add parcel", command=self._add_parcel).grid(
+            row=1, column=5, pady=(4, 8)
+        )
+        list_frame = ttk.Frame(body)
+        list_frame.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        self.parcel_tree = ttk.Treeview(
+            list_frame,
+            columns=("description", "weight", "dimensions"),
+            show="headings",
+            height=5,
+            selectmode="browse",
+        )
+        self.parcel_tree.heading("description", text="Description")
+        self.parcel_tree.heading("weight", text="Weight (kg)")
+        self.parcel_tree.heading("dimensions", text="Dimensions (cm)")
+        self.parcel_tree.column("description", width=330)
+        self.parcel_tree.column("weight", width=100)
+        self.parcel_tree.column("dimensions", width=190)
+        self.parcel_tree.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.parcel_tree.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.parcel_tree.configure(yscrollcommand=scroll.set)
+        ttk.Button(body, text="Remove selected parcel", command=self._remove_parcel).grid(
+            row=9, column=0, columnspan=2, sticky="w", pady=(8, 0)
+        )
+        self.error = tk.StringVar(self)
+        ttk.Label(body, textvariable=self.error, foreground="#a32121", wraplength=760).grid(
+            row=10, column=0, columnspan=2, sticky="w", pady=(10, 0)
+        )
+        ttk.Label(
+            body,
+            text="Sample service area: Melbourne, Richmond, Footscray, Hawthorn, Carlton, St Kilda, "
+                 "Brunswick, South Yarra, Docklands and Southbank. Add each parcel before saving.",
+            wraplength=760,
+        ).grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        buttons = ttk.Frame(body)
+        buttons.grid(row=12, column=0, columnspan=2, sticky="e", pady=(15, 0))
+        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side="left", padx=8)
+        ttk.Button(buttons, text="Create request", command=self._save).pack(side="left")
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.grab_set()
+
+    def _add_parcel(self) -> None:
+        parcel = {key: value.get().strip() for key, value in self.parcel_variables.items()}
+        if not all(parcel.values()):
+            self.error.set("Enter all five parcel fields, then choose Add parcel.")
+            return
+        self.parcels.append(parcel)
+        self._redraw_parcels()
+        for variable in self.parcel_variables.values():
+            variable.set("")
+        self.error.set("")
+
+    def _redraw_parcels(self) -> None:
+        self.parcel_tree.delete(*self.parcel_tree.get_children())
+        for index, parcel in enumerate(self.parcels):
+            dimensions = " × ".join(parcel[key] for key in ("length_cm", "width_cm", "height_cm"))
+            self.parcel_tree.insert(
+                "", "end", iid=str(index),
+                values=(parcel["description"], parcel["weight_kg"], dimensions),
+            )
+
+    def _remove_parcel(self) -> None:
+        selected = self.parcel_tree.selection()
+        if selected:
+            del self.parcels[int(selected[0])]
+            self._redraw_parcels()
+
+    def _save(self) -> None:
+        if any(variable.get().strip() for variable in self.parcel_variables.values()):
+            self.error.set("A parcel is still in the input fields. Add it to the list or clear those fields.")
+            return
+        values = {key: variable.get().strip() for key, variable in self.customer_variables.items()}
+        try:
+            request_id = self.owner.app.create_request(**values, parcels=self.parcels)
+        except EXPECTED_ERRORS as error:
+            self.error.set(str(error))
+            return
+        self.owner.refresh(request_id=request_id)
+        self.owner.status.set(f"Request {request_id} created.")
+        self.destroy()
+
+
+class MainWindow:
+    """Main screen; accepts an existing root for a withdrawn-window smoke test."""
+
+    def __init__(self, root: tk.Tk, app: Any) -> None:
+        self.root = root
+        self.app = app
+        self.snapshot: dict[str, Any] = {}
+        self.request_rows: dict[str, dict[str, Any]] = {}
+        self.staff_rows: dict[str, dict[str, Any]] = {}
+        root.title("YOWD | Delivery management")
+        root.geometry("1240x780")
+        root.minsize(980, 680)
+        style = ttk.Style(root)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+        style.configure("TButton", padding=(10, 7))
+        style.configure("Treeview", rowheight=30)
+        style.configure("Treeview.Heading", padding=(8, 8))
+        style.configure("Title.TLabel", font=("Segoe UI", 21, "bold"))
+        style.configure("Section.TLabel", font=("Segoe UI", 11, "bold"))
+        style.configure("Muted.TLabel", foreground="#52616f")
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(1, weight=1)
+        header = ttk.Frame(root, padding=(20, 15, 20, 12))
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text="YOWD delivery management", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            header,
+            text="Local prototype • Simulated payment records • Dates use local Melbourne time",
+            style="Muted.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Button(header, text="Load sample data", command=self._seed_demo).grid(
+            row=0, column=1, padx=(12, 8)
+        )
+        ttk.Button(header, text="Refresh", command=self.refresh).grid(row=0, column=2)
+        self.counts = tk.StringVar(root)
+        ttk.Label(header, textvariable=self.counts, style="Muted.TLabel").grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(10, 0)
+        )
+        self.notebook = ttk.Notebook(root)
+        self.notebook.grid(row=1, column=0, sticky="nsew", padx=20)
+        self._build_requests()
+        self._build_staff()
+        self._build_statistics()
+        footer = ttk.Frame(root, padding=(20, 10))
+        footer.grid(row=2, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        self.status = tk.StringVar(root, "Ready. Create a request and register staff, or load sample data.")
+        ttk.Label(footer, textvariable=self.status, wraplength=1150).grid(sticky="w")
+        self.storage = tk.StringVar(root)
+        ttk.Label(footer, textvariable=self.storage, style="Muted.TLabel", wraplength=1150).grid(
+            sticky="w", pady=(4, 0)
+        )
+        self.refresh()
+
+    def _build_requests(self) -> None:
+        tab = ttk.Frame(self.notebook, padding=14)
+        self.notebook.add(tab, text="  Delivery requests  ")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(2, weight=1)
+        toolbar = ttk.Frame(tab)
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        actions = (
+            ("New request", lambda: NewRequestDialog(self)),
+            ("Prepare quote", self._quote),
+            ("Accept quote", lambda: self._respond(True)),
+            ("Decline quote", lambda: self._respond(False)),
+            ("Allocate worker", self._allocate),
+            ("Record pickup", self._pickup),
+            ("Authorise payment exception", self._authorise),
+            ("Delivered", lambda: self._delivery(True)),
+            ("Failed delivery", lambda: self._delivery(False)),
+            ("Retry pickup", self._retry_pickup),
+        )
+        for index, (label, callback) in enumerate(actions):
+            ttk.Button(toolbar, text=label, command=callback).grid(
+                row=index // 5, column=index % 5, sticky="ew", padx=(0, 6), pady=(0, 6)
+            )
+        for column in range(5):
+            toolbar.columnconfigure(column, weight=1)
+        ttk.Label(
+            tab, text="Select a request to view its complete record or perform an action.",
+            style="Muted.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(0, 8))
+        panes = ttk.Panedwindow(tab, orient="vertical")
+        panes.grid(row=2, column=0, sticky="nsew")
+        list_frame = ttk.Frame(panes)
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        columns = ("customer", "destination", "status", "quote_amount", "worker", "payment")
+        self.request_tree = ttk.Treeview(
+            list_frame, columns=columns, show="tree headings", selectmode="browse", height=8
+        )
+        self.request_tree.heading("#0", text="Request ID")
+        self.request_tree.column("#0", width=130, minwidth=80)
+        headings = ("Customer", "Destination", "Status", "Quote ($)", "Worker", "Payment")
+        widths = (140, 180, 140, 85, 130, 130)
+        for key, heading, width in zip(columns, headings, widths):
+            self.request_tree.heading(key, text=heading)
+            self.request_tree.column(key, width=width, minwidth=60)
+        self.request_tree.grid(row=0, column=0, sticky="nsew")
+        vertical = ttk.Scrollbar(list_frame, orient="vertical", command=self.request_tree.yview)
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal = ttk.Scrollbar(list_frame, orient="horizontal", command=self.request_tree.xview)
+        horizontal.grid(row=1, column=0, sticky="ew")
+        self.request_tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        self.request_tree.bind("<<TreeviewSelect>>", lambda _event: self._show_request())
+        panes.add(list_frame, weight=3)
+        details_frame = ttk.LabelFrame(panes, text="Selected request", padding=10)
+        details_frame.columnconfigure(0, weight=1)
+        details_frame.rowconfigure(0, weight=1)
+        self.details = tk.Text(
+            details_frame, wrap="word", height=10, state="disabled",
+            font=("Consolas", 10), relief="flat", background="#fafbfc", padx=10, pady=8,
+        )
+        self.details.grid(row=0, column=0, sticky="nsew")
+        details_scroll = ttk.Scrollbar(details_frame, orient="vertical", command=self.details.yview)
+        details_scroll.grid(row=0, column=1, sticky="ns")
+        self.details.configure(yscrollcommand=details_scroll.set)
+        panes.add(details_frame, weight=2)
+
+    def _build_staff(self) -> None:
+        tab = ttk.Frame(self.notebook, padding=14)
+        self.notebook.add(tab, text="  Staff and availability  ")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(2, weight=1)
+        toolbar = ttk.Frame(tab)
+        toolbar.grid(row=0, column=0, sticky="w", pady=(0, 12))
+        for label, callback in (
+            ("Register staff", self._register_staff),
+            ("Set availability", self._availability),
+            ("Deactivate selected staff", self._deactivate),
+        ):
+            ttk.Button(toolbar, text=label, command=callback).pack(side="left", padx=(0, 8))
+        ttk.Label(
+            tab,
+            text="Former workers remain visible so delivery history is retained. "
+                 "Availability periods use YYYY-MM-DD HH:MM.",
+            wraplength=1050, style="Muted.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(0, 12))
+        list_frame = ttk.Frame(tab)
+        list_frame.grid(row=2, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        self.staff_tree = ttk.Treeview(
+            list_frame, columns=("name", "active", "availability"),
+            show="tree headings", selectmode="browse",
+        )
+        self.staff_tree.heading("#0", text="Staff ID")
+        self.staff_tree.heading("name", text="Name")
+        self.staff_tree.heading("active", text="Employment")
+        self.staff_tree.heading("availability", text="Availability")
+        self.staff_tree.column("#0", width=150)
+        self.staff_tree.column("name", width=200)
+        self.staff_tree.column("active", width=110)
+        self.staff_tree.column("availability", width=550)
+        self.staff_tree.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.staff_tree.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.staff_tree.configure(yscrollcommand=scroll.set)
+
+    def _build_statistics(self) -> None:
+        tab = ttk.Frame(self.notebook, padding=18)
+        self.notebook.add(tab, text="  Delivery statistics  ")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(2, weight=1)
+        ttk.Label(tab, text="Delivery outcomes by completion period", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 12)
+        )
+        filters = ttk.Frame(tab)
+        filters.grid(row=1, column=0, sticky="w", pady=(0, 12))
+        today = date.today()
+        self.statistics_start = tk.StringVar(self.root, today.replace(day=1).isoformat())
+        self.statistics_end = tk.StringVar(self.root, today.isoformat())
+        ttk.Label(filters, text="From (YYYY-MM-DD)").pack(side="left", padx=(0, 8))
+        ttk.Entry(filters, textvariable=self.statistics_start, width=14).pack(side="left", padx=(0, 18))
+        ttk.Label(filters, text="To (inclusive)").pack(side="left", padx=(0, 8))
+        ttk.Entry(filters, textvariable=self.statistics_end, width=14).pack(side="left", padx=(0, 18))
+        ttk.Button(filters, text="Calculate", command=self._statistics).pack(side="left")
+        self.statistics_text = tk.Text(
+            tab, wrap="word", state="disabled", font=("Consolas", 11),
+            background="#fafbfc", relief="flat", padx=15, pady=15,
+        )
+        self.statistics_text.grid(row=2, column=0, sticky="nsew")
+        self._set_text(self.statistics_text, "Select a reporting period and choose Calculate.")
+
+    @staticmethod
+    def _set_text(widget: tk.Text, value: str) -> None:
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        widget.insert("1.0", value)
+        widget.configure(state="disabled")
+
+    def refresh(self, request_id: str | None = None) -> None:
+        selected_request = request_id or self._selected_request(required=False)
+        selected_staff = self._selected_staff(required=False)
+        try:
+            snapshot = self.app.overview()
+        except EXPECTED_ERRORS as error:
+            messagebox.showerror("Unable to load records", str(error), parent=self.root)
+            return
+        self.snapshot = snapshot
+        self.request_rows = {str(row["id"]): row for row in snapshot.get("requests", [])}
+        self.staff_rows = {str(row["id"]): row for row in snapshot.get("staff", [])}
+        self.request_tree.delete(*self.request_tree.get_children())
+        for identifier, row in self.request_rows.items():
+            self.request_tree.insert(
+                "", "end", iid=identifier, text=identifier,
+                values=tuple(_display(row.get(key)) for key in self.request_tree["columns"]),
+            )
+        self.staff_tree.delete(*self.staff_tree.get_children())
+        for identifier, row in self.staff_rows.items():
+            availability = row.get("availability", "")
+            if isinstance(availability, list):
+                availability = "; ".join(map(str, availability))
+            self.staff_tree.insert(
+                "", "end", iid=identifier, text=identifier,
+                values=(row.get("name", ""), "Active" if row.get("active") else "Former / inactive", availability),
+            )
+        if selected_request in self.request_rows:
+            self.request_tree.selection_set(selected_request)
+            self.request_tree.see(selected_request)
+        if selected_staff in self.staff_rows:
+            self.staff_tree.selection_set(selected_staff)
+        active_staff = sum(bool(row.get("active")) for row in self.staff_rows.values())
+        counts = snapshot.get("counts", {})
+        count_text = " | ".join(f"{key}: {value}" for key, value in counts.items())
+        self.counts.set(
+            f"{len(self.request_rows)} requests  •  {active_staff} active workers"
+            + (f"  •  {count_text}" if count_text else "")
+        )
+        self.storage.set("Local data: " + _display(snapshot.get("storage_path", "")))
+        self._show_request()
+
+    def _selected_request(self, required: bool = True) -> str | None:
+        selection = self.request_tree.selection()
+        if selection:
+            return selection[0]
+        if required:
+            messagebox.showinfo("Select a request", "Select a delivery request first.", parent=self.root)
+        return None
+
+    def _selected_staff(self, required: bool = True) -> str | None:
+        selection = self.staff_tree.selection()
+        if selection:
+            return selection[0]
+        if required:
+            messagebox.showinfo("Select staff", "Select a staff member first.", parent=self.root)
+        return None
+
+    def _show_request(self) -> None:
+        request_id = self._selected_request(required=False)
+        if request_id is None:
+            self._set_text(self.details, "No request selected. Use New request to start a delivery transaction.")
+            return
+        try:
+            content = self.app.request_details(request_id)
+        except EXPECTED_ERRORS as error:
+            content = str(error)
+        self._set_text(self.details, content)
+
+    def _action(self, action: Callable[[], Any], success: str) -> None:
+        try:
+            result = action()
+        except EXPECTED_ERRORS as error:
+            messagebox.showerror("Action could not be completed", str(error), parent=self.root)
+            return
+        self.refresh()
+        self.status.set(success + (f" {result}" if result is not None else ""))
+
+    def _worker_choices(self) -> dict[str, str]:
+        return {
+            f"{row.get('name', '')} | {identifier}"
+            + (" (inactive)" if not row.get("active") else ""): identifier
+            for identifier, row in self.staff_rows.items()
+        }
+
+    def _worker_form(
+        self, title: str, explanation: str, submit: Callable[[str, dict[str, str]], None],
+        fields: list[tuple[str, str, str]] | None = None, *, button_text: str = "Save",
+    ) -> None:
+        choices = self._worker_choices()
+        if not choices:
+            messagebox.showinfo("No staff registered", "Register a staff member first.", parent=self.root)
+            return
+
+        def save(values: dict[str, str]) -> None:
+            if values["staff"] not in choices:
+                raise ValueError("Choose the worker reporting or performing this action.")
+            submit(choices[values["staff"]], values)
+            self.refresh()
+
+        FormDialog(
+            self.root, title, [("staff", "Worker", "")] + (fields or []), save,
+            explanation=explanation, choices={"staff": list(choices)}, button_text=button_text,
+        )
+
+    def _quote(self) -> None:
+        request_id = self._selected_request()
+        if request_id is None:
+            return
+        suggestion = ""
+        try:
+            pickup_at, delivery_at = self.app.suggest_quote_window(request_id)
+            pickup_default = pickup_at.strftime(DATE_FORMAT)
+            delivery_default = delivery_at.strftime(DATE_FORMAT)
+        except EXPECTED_ERRORS as error:
+            pickup_default = ""
+            delivery_default = ""
+            suggestion = f"No suggested window: {error} "
+
+        def save(values: dict[str, str]) -> None:
+            amount = self.app.prepare_quote(
+                request_id, _parse_datetime(values["pickup"]), _parse_datetime(values["delivery"])
+            )
+            self.refresh()
+            self.status.set(f"Quote prepared for {request_id}: ${amount}. Customer response is still required.")
+
+        FormDialog(
+            self.root, "Prepare delivery quote",
+            [("pickup", "Estimated pickup", pickup_default), ("delivery", "Estimated delivery", delivery_default)],
+            save,
+            explanation=suggestion + "Suggested times consider request age, duration and current availability; "
+                        "they do not reserve a worker. Times are editable. Enter YYYY-MM-DD HH:MM. "
+                        "The quoted amount is calculated by the application.",
+            button_text="Prepare quote",
+        )
+
+    def _respond(self, accepted: bool) -> None:
+        request_id = self._selected_request()
+        if request_id is None:
+            return
+        response = "accept" if accepted else "decline"
+        if not messagebox.askyesno(
+            "Confirm customer response", f"Record the customer's decision to {response} the current quote?",
+            parent=self.root,
+        ):
+            return
+        self._action(
+            lambda: self.app.respond_quote(request_id, accepted),
+            f"Customer decision recorded: quote {'accepted' if accepted else 'declined'}.",
+        )
+
+    def _allocate(self) -> None:
+        request_id = self._selected_request()
+        if request_id is None:
+            return
+
+        def save(worker_id: str, _values: dict[str, str]) -> None:
+            self.app.allocate(request_id, worker_id)
+            self.status.set(f"Worker allocated to {request_id}.")
+
+        self._worker_form(
+            "Allocate delivery worker",
+            "The application checks request status, active assignments, employment and the quoted window.",
+            save, button_text="Allocate",
+        )
+
+    def _pickup(self) -> None:
+        request_id = self._selected_request()
+        if request_id is None:
+            return
+        row = self.request_rows.get(request_id, {})
+        recorded_amount = row.get("received_amount")
+        amount_default = recorded_amount if recorded_amount not in (None, "") else row.get("quote_amount")
+
+        def save(worker_id: str, values: dict[str, str]) -> None:
+            collected = values["parcels"] == "All parcels collected and checked"
+            if not messagebox.askyesno(
+                "Confirm pickup outcome",
+                "Record successful parcel collection and the simulated payment outcome?"
+                if collected else "Record a failed pickup? No payment is recorded and the assignment will end.",
+                parent=self.root,
+            ):
+                raise ValueError("Pickup was not recorded. You can correct the form or choose Cancel.")
+            outcome = self.app.pickup(
+                request_id, worker_id, values["amount"], parcel_ok=collected
+            )
+            self.status.set(f"Pickup outcome for {request_id}: {outcome}")
+
+        choices = self._worker_choices()
+        if not choices:
+            messagebox.showinfo("No staff registered", "Register and allocate a worker first.", parent=self.root)
+            return
+
+        def submit(values: dict[str, str]) -> None:
+            if values["staff"] not in choices:
+                raise ValueError("Choose the worker reporting the pickup.")
+            if not values["parcels"]:
+                raise ValueError("Choose the parcel collection outcome.")
+            save(choices[values["staff"]], values)
+            self.refresh()
+
+        FormDialog(
+            self.root, "Record pickup and simulated payment",
+            [("staff", "Reporting worker", ""), ("parcels", "Parcel outcome", ""),
+             ("amount", "Amount received ($)", _display(amount_default))],
+            submit,
+            explanation="Payment is recorded locally; no bank transaction occurs. A payment mismatch "
+                        "requires a separate office authorisation before pickup can complete.",
+            choices={"staff": list(choices), "parcels": ["All parcels collected and checked", "Pickup failed / parcels not collected"]},
+            button_text="Record pickup",
+        )
+
+    def _authorise(self) -> None:
+        request_id = self._selected_request()
+        if request_id is None:
+            return
+
+        def save(values: dict[str, str]) -> None:
+            self.app.authorise_payment(request_id, values["authorised_by"], values["reason"])
+            self.refresh()
+            self.status.set(
+                "Authorisation recorded. The allocated worker must confirm pickup again "
+                "using the recorded received amount."
+            )
+
+        FormDialog(
+            self.root, "Office action: authorise payment exception",
+            [("authorised_by", "Authorised by", ""), ("reason", "Business reason", "")],
+            save,
+            explanation="Use this distinct office action only after a payment exception has been recorded. "
+                        "Enter the person authorising the exception and their reason.",
+            button_text="Record authorisation",
+        )
+
+    def _delivery(self, successful: bool) -> None:
+        request_id = self._selected_request()
+        if request_id is None:
+            return
+
+        def save(worker_id: str, values: dict[str, str]) -> None:
+            if not successful and not values["reason"]:
+                raise ValueError("Enter the reason delivery failed.")
+            if not messagebox.askyesno(
+                "Confirm final delivery outcome",
+                "Confirm all parcels have been handed over successfully?"
+                if successful else "Record failed delivery, end this assignment and retain the pickup payment?",
+                parent=self.root,
+            ):
+                raise ValueError("Delivery outcome was not recorded. Correct the form or choose Cancel.")
+            outcome = self.app.deliver(
+                request_id, worker_id, successful, values.get("reason", "")
+            )
+            self.status.set(f"Delivery outcome for {request_id}: {outcome}")
+
+        self._worker_form(
+            "Record delivered parcels" if successful else "Record failed delivery",
+            "The application checks that the reporting worker owns the active assignment and pickup is complete.",
+            save, [] if successful else [("reason", "Failure reason", "")],
+            button_text="Record delivered" if successful else "Record failed delivery",
+        )
+
+    def _retry_pickup(self) -> None:
+        request_id = self._selected_request()
+        if request_id is None:
+            return
+        if messagebox.askyesno(
+            "Office action: allow pickup retry",
+            "Return this failed-pickup request to Accepted for a new allocation? "
+            "The previous assignment remains in its history.", parent=self.root,
+        ):
+            self._action(lambda: self.app.retry_pickup(request_id), "Pickup retry authorised; request awaits allocation.")
+
+    def _register_staff(self) -> None:
+        def save(values: dict[str, str]) -> None:
+            staff_id = self.app.register_staff(
+                values["name"], values["email"], values["phone"],
+                _parse_datetime(values["start"]), _parse_datetime(values["end"]),
+            )
+            self.refresh()
+            self.status.set(f"Staff member {staff_id} registered.")
+
+        FormDialog(
+            self.root, "Register delivery staff",
+            [("name", "Name", ""), ("email", "Email", ""), ("phone", "Phone", ""),
+             ("start", "Available from", _tomorrow(8)), ("end", "Available until", _tomorrow(18))],
+            save, explanation="Register a worker with an initial availability period. Dates: YYYY-MM-DD HH:MM.",
+            button_text="Register staff",
+        )
+
+    def _availability(self) -> None:
+        staff_id = self._selected_staff()
+        if staff_id is None:
+            return
+
+        def save(values: dict[str, str]) -> None:
+            periods = []
+            for index in range(1, 4):
+                start, end = values[f"start{index}"], values[f"end{index}"]
+                if not start and not end:
+                    continue
+                if not start or not end:
+                    raise ValueError(f"Enter both dates for availability period {index}.")
+                periods.append((_parse_datetime(start), _parse_datetime(end)))
+            self.app.set_availability(staff_id, periods)
+            self.refresh()
+            self.status.set(f"Availability replaced for {staff_id}.")
+
+        fields = []
+        for index in range(1, 4):
+            fields.extend([
+                (f"start{index}", f"Period {index}: from", ""),
+                (f"end{index}", f"Period {index}: until", ""),
+            ])
+        FormDialog(
+            self.root, "Replace staff availability", fields, save,
+            explanation="This replaces the selected worker's availability with up to three periods. "
+                        "Leave unused pairs blank. Leave all pairs blank to record no available hours. "
+                        "Enter YYYY-MM-DD HH:MM.",
+            button_text="Replace availability",
+        )
+
+    def _deactivate(self) -> None:
+        staff_id = self._selected_staff()
+        if staff_id is None:
+            return
+        name = self.staff_rows.get(staff_id, {}).get("name", staff_id)
+        if messagebox.askyesno(
+            "Deactivate staff", f"Deactivate {name}? Their record and delivery history will be retained.",
+            parent=self.root,
+        ):
+            self._action(lambda: self.app.deactivate_staff(staff_id), f"{name} deactivated.")
+
+    def _statistics(self) -> None:
+        try:
+            start = _parse_date(self.statistics_start.get())
+            end = _parse_date(self.statistics_end.get())
+            result = self.app.statistics(start, end)
+        except EXPECTED_ERRORS as error:
+            messagebox.showerror("Invalid reporting period", str(error), parent=self.root)
+            return
+        lines = [
+            f"Reporting period: {start.isoformat()} to {end.isoformat()} (inclusive)", "",
+            f"Completed deliveries: {result.get('completed', 0)}",
+            f"Failed outcomes: {result.get('failed', 0)}",
+        ]
+        average = result.get("average_minutes")
+        if average is not None:
+            lines.append(f"Average completion time (minutes): {average}")
+        lines.extend(["", "Completed deliveries by worker:"])
+        by_staff = result.get("by_staff", {})
+        if isinstance(by_staff, dict):
+            lines.extend(f"  {worker}: {count}" for worker, count in by_staff.items())
+        else:
+            lines.append(str(by_staff))
+        if not by_staff:
+            lines.append("  No completed deliveries in this period.")
+        self._set_text(self.statistics_text, "\n".join(lines))
+        self.status.set("Statistics calculated from retained delivery outcomes.")
+
+    def _seed_demo(self) -> None:
+        if messagebox.askyesno(
+            "Load sample data",
+            "Load clearly labelled sample customers, requests and staff into this local database? "
+            "This is allowed only when the database is empty.", parent=self.root,
+        ):
+            self._action(self.app.seed_demo, "Sample data loaded. These records are for demonstration.")
+
+
+def launch(app: Any) -> None:
+    """Launch the desktop interface and close the application on exit."""
+    root = tk.Tk()
+    MainWindow(root, app)
+
+    def close() -> None:
+        app.close()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", close)
+    root.mainloop()

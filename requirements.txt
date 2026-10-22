@@ -1,0 +1,2 @@
+# Runtime and tests use Python's standard library only.
+# Tkinter must be included in your Python installation.
