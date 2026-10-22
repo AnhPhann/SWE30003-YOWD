@@ -13,7 +13,7 @@ from yowd.__main__ import DemoClock, run_demo
 from yowd.application import YowdApplication
 from yowd.models import DomainError, ParcelStatus, RequestStatus
 from yowd.serialization import encode_state
-from yowd.storage import StorageError
+from yowd.storage import SQLiteStore, StorageError
 
 
 class ApplicationTests(unittest.TestCase):
@@ -38,6 +38,7 @@ class ApplicationTests(unittest.TestCase):
             "customer_name": "Anh Phan", "email": "anh@example.com",
             "phone": "0400123456", "pickup": "Richmond",
             "destination": "Footscray", "parcels": [self.parcel()],
+            "pickup_address": "12 Bridge Road", "destination_address": "8 Hopkins Street",
         }
         return self.app.create_request(**(values | changes))
 
@@ -56,6 +57,64 @@ class ApplicationTests(unittest.TestCase):
         return encode_state(
             self.app.customers, self.app.staff_list, self.app.requests,
         )
+
+    def test_new_lodgement_requires_full_addresses_without_saving_partial_data(self):
+        before = self.snapshot()
+        with self.assertRaisesRegex(DomainError, "Pickup address"):
+            self.app.create_request(
+                "Anh Phan", "anh@example.com", "0400123456", "Richmond", "Footscray",
+                [self.parcel()],
+            )
+        self.assertEqual(self.snapshot(), before)
+
+    def test_addresses_are_retained_separately_from_the_pricing_suburbs(self):
+        request_id = self.request(pickup=" richmond ", pickup_address="  Unit 2, 12 Bridge Road  ")
+        request = self.app.requests[request_id]
+        self.assertEqual(request.pickup_address, "Unit 2, 12 Bridge Road")
+        self.assertEqual(request.destination_address, "8 Hopkins Street")
+        self.assertEqual((request.pickup, request.destination), ("Richmond", "Footscray"))
+        self.assertIn("Unit 2, 12 Bridge Road", self.app.request_details(request_id))
+        self.assertIn("8 Hopkins Street", self.app.request_details(request_id))
+        row = self.app.overview()["requests"][0]
+        self.assertEqual(row["pickup_address"], "Unit 2, 12 Bridge Road")
+        self.assertEqual(self.app.prepare_quote(request_id), Decimal("21.00"))
+
+    def test_blank_or_invalid_address_does_not_save_customer_or_request(self):
+        before = self.snapshot()
+        for changes in (
+            {"pickup_address": " "}, {"destination_address": ""},
+            {"pickup_address": None}, {"destination_address": 12},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(DomainError):
+                self.request(**changes)
+            self.assertEqual(self.snapshot(), before)
+
+    def test_address_correction_before_quote_is_atomic_and_keeps_suburbs(self):
+        request_id = self.request()
+        self.app.update_request_addresses(request_id, "Unit 7, 25 Church Street", "4 Barkly Street")
+        request = self.app.requests[request_id]
+        self.assertEqual((request.pickup_address, request.destination_address), (
+            "Unit 7, 25 Church Street", "4 Barkly Street",
+        ))
+        self.assertEqual((request.pickup, request.destination), ("Richmond", "Footscray"))
+        before = self.snapshot()
+        with self.assertRaises(DomainError):
+            self.app.update_request_addresses(request_id, "A changed pickup", " ")
+        self.assertEqual(self.snapshot(), before)
+        self.app.prepare_quote(request_id)
+        quoted = self.snapshot()
+        with self.assertRaises(DomainError):
+            self.app.update_request_addresses(request_id, "Another pickup", "Another destination")
+        self.assertEqual(self.snapshot(), quoted)
+
+    def test_draft_parcel_validation_never_saves_invalid_or_valid_drafts(self):
+        before = self.snapshot()
+        for invalid in ("0", "-1", "NaN", "Infinity", "not-a-number"):
+            with self.subTest(weight=invalid), self.assertRaises(DomainError):
+                self.app.validate_parcel(self.parcel(weight_kg=invalid))
+            self.assertEqual(self.snapshot(), before)
+        self.app.validate_parcel(self.parcel())
+        self.assertEqual(self.snapshot(), before)
 
     def test_connected_multi_parcel_delivery_and_completion_date_statistics(self):
         request_id = self.allocated(parcels=[
@@ -303,6 +362,57 @@ class PersistenceIntegrationTests(unittest.TestCase):
         app = YowdApplication(self.db_path, clock=self.clock)
         self.addCleanup(app.close)
         return app
+
+    def test_corrected_addresses_survive_restart_and_failed_save_rolls_back(self):
+        app = self.open_app()
+        app.seed_demo()
+        request_id = next(iter(app.requests))
+        app.update_request_addresses(request_id, "Unit 7, 25 Church Street", "4 Barkly Street")
+        before = encode_state(app.customers, app.staff_list, app.requests)
+        with patch.object(app.store, "save", side_effect=StorageError("Disk failure")):
+            with self.assertRaisesRegex(StorageError, "Disk failure"):
+                app.update_request_addresses(request_id, "A different pickup", "A different destination")
+        self.assertEqual(encode_state(app.customers, app.staff_list, app.requests), before)
+        app.close()
+        reopened = self.open_app()
+        request = reopened.requests[request_id]
+        self.assertEqual((request.pickup_address, request.destination_address), (
+            "Unit 7, 25 Church Street", "4 Barkly Street",
+        ))
+        self.assertEqual((request.pickup, request.destination), ("Richmond", "Footscray"))
+        self.assertEqual(reopened.prepare_quote(request_id), Decimal("25.00"))
+
+    def test_legacy_request_requires_address_repair_before_quotation(self):
+        fixture = YowdApplication(clock=self.clock)
+        self.addCleanup(fixture.close)
+        fixture.seed_demo()
+        request_id = next(iter(fixture.requests))
+        legacy = encode_state(fixture.customers, fixture.staff_list, fixture.requests)
+        legacy["schema_version"] = 1
+        for record in legacy["requests"]:
+            del record["pickup_address"], record["destination_address"]
+        with SQLiteStore(self.db_path) as store:
+            store.save(legacy)
+
+        app = self.open_app()
+        self.assertFalse(app.requests[request_id].has_full_addresses)
+        with self.assertRaisesRegex(DomainError, "addresses before quotation"):
+            app.prepare_quote(request_id)
+        self.assertEqual(app.requests[request_id].status, RequestStatus.REQUESTED)
+        self.assertIsNone(app.requests[request_id].quote)
+        with SQLiteStore(self.db_path) as store:
+            self.assertEqual(store.load(), legacy)
+
+        app.update_request_addresses(request_id, "12 Bridge Road", "8 Hopkins Street")
+        with SQLiteStore(self.db_path) as store:
+            repaired = store.load()
+        self.assertEqual(repaired["schema_version"], 2)
+        self.assertEqual(repaired["requests"][0]["pickup_address"], "12 Bridge Road")
+        self.assertEqual(app.prepare_quote(request_id), Decimal("25.00"))
+        app.close()
+        reopened = self.open_app()
+        self.assertEqual(reopened.requests[request_id].status, RequestStatus.QUOTED)
+        self.assertEqual(reopened.requests[request_id].destination_address, "8 Hopkins Street")
 
     def test_restart_restores_pending_payment_and_shared_customer_history(self):
         app = self.open_app()

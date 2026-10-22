@@ -25,6 +25,7 @@ from .models import (
     StaffList,
 )
 from .pricing import SERVICE_ZONES, TariffPolicy, normalise_suburb
+from .models.common import require_text
 from .serialization import decode_state, encode_state
 from .storage import SQLiteStore
 
@@ -44,6 +45,22 @@ def _number(value: object, label: str) -> Decimal:
     if not parsed.is_finite():
         raise DomainError(f"{label} must be a finite number.")
     return parsed
+
+
+def _parcel_from_input(data: dict[str, str], parcel_id: str) -> Parcel:
+    """Use one domain validation path for draft edits and final lodgement."""
+    if not isinstance(data, dict):
+        raise DomainError("Each parcel must provide its description and measurements.")
+    try:
+        return Parcel(
+            parcel_id, data["description"],
+            _number(data["weight_kg"], "Parcel weight"),
+            _number(data["length_cm"], "Parcel length"),
+            _number(data["width_cm"], "Parcel width"),
+            _number(data["height_cm"], "Parcel height"),
+        )
+    except KeyError as exc:
+        raise DomainError(f"A required parcel field is missing: {exc.args[0]}.") from None
 
 
 class YowdApplication:
@@ -100,9 +117,14 @@ class YowdApplication:
         pickup: str,
         destination: str,
         parcels: list[dict[str, str]],
+        *,
+        pickup_address: str = "",
+        destination_address: str = "",
     ) -> str:
         """Lodge a validated multi-parcel request, retaining outside-area rejection."""
         def create() -> str:
+            pickup_detail = require_text(pickup_address, "Pickup address")
+            destination_detail = require_text(destination_address, "Destination address")
             candidate = Customer(_identifier("CUS"), customer_name, email, phone)
             customer = next(
                 (
@@ -120,24 +142,12 @@ class YowdApplication:
                 )
             if not isinstance(parcels, list):
                 raise DomainError("Supply a list containing at least one parcel.")
-            items = []
-            for data in parcels:
-                if not isinstance(data, dict):
-                    raise DomainError("Each parcel must provide its description and measurements.")
-                try:
-                    items.append(Parcel(
-                        _identifier("PAR"), data["description"],
-                        _number(data["weight_kg"], "Parcel weight"),
-                        _number(data["length_cm"], "Parcel length"),
-                        _number(data["width_cm"], "Parcel width"),
-                        _number(data["height_cm"], "Parcel height"),
-                    ))
-                except KeyError as exc:
-                    raise DomainError(f"A required parcel field is missing: {exc.args[0]}.") from None
+            items = [_parcel_from_input(data, _identifier("PAR")) for data in parcels]
             request_id = _identifier("REQ")
             request = DeliveryRequest(
                 request_id, customer, normalise_suburb(pickup),
                 normalise_suburb(destination), items, self._clock(),
+                pickup_address=pickup_detail, destination_address=destination_detail,
             )
             unsupported = [
                 name for name in (request.pickup, request.destination)
@@ -154,6 +164,19 @@ class YowdApplication:
             return request_id
 
         return self._change(create)
+
+    @staticmethod
+    def validate_parcel(data: dict[str, str]) -> None:
+        """Validate an unsaved parcel draft without changing business state."""
+        _parcel_from_input(data, "DRAFT-PARCEL")
+
+    def update_request_addresses(
+        self, request_id: str, pickup_address: str, destination_address: str,
+    ) -> None:
+        """Correct street details before quotation, preserving route suburbs."""
+        self._change(lambda: self._request(request_id).update_addresses(
+            pickup_address, destination_address,
+        ))
 
     def register_staff(
         self, name: str, email: str, phone: str,
@@ -224,6 +247,8 @@ class YowdApplication:
     ) -> Decimal:
         def prepare() -> Decimal:
             request = self._request(request_id)
+            if not request.has_full_addresses:
+                raise DomainError("Record full pickup and destination addresses before quotation.")
             if pickup_at is None and delivery_at is None:
                 pickup, delivery = self.suggest_quote_window(request_id)
             elif pickup_at is None or delivery_at is None:
@@ -340,6 +365,8 @@ class YowdApplication:
                 "customer": request.customer.name,
                 "pickup": request.pickup,
                 "destination": request.destination,
+                "pickup_address": request.pickup_address,
+                "destination_address": request.destination_address,
                 "status": request.status.value,
                 "quote_amount": str(request.quote.amount) if request.quote else "",
                 "worker": worker.name if worker else "",
@@ -373,6 +400,8 @@ class YowdApplication:
             f"Customer: {request.customer.name} ({request.customer.customer_id})",
             f"Contact: {request.customer.email} | {request.customer.phone}",
             f"Route: {request.pickup} to {request.destination}",
+            f"Pickup address: {request.pickup_address or 'Not recorded'}",
+            f"Destination address: {request.destination_address or 'Not recorded'}",
             f"Status: {request.status.value}",
             f"Lodged: {request.created_at:%Y-%m-%d %H:%M}",
             "", "Parcels:",
@@ -429,7 +458,10 @@ class YowdApplication:
                 Parcel(_identifier("PAR"), "Books", Decimal("2"), Decimal("20"), Decimal("15"), Decimal("10")),
                 Parcel(_identifier("PAR"), "Clothing", Decimal("1"), Decimal("20"), Decimal("15"), Decimal("10")),
             ]
-            request = DeliveryRequest(_identifier("REQ"), customer, "Richmond", "Footscray", parcels, now)
+            request = DeliveryRequest(
+                _identifier("REQ"), customer, "Richmond", "Footscray", parcels, now,
+                pickup_address="12 Bridge Road", destination_address="8 Hopkins Street",
+            )
             self.customers[customer.customer_id] = customer
             self.requests[request.request_id] = request
 

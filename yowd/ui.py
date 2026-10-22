@@ -137,17 +137,16 @@ class NewRequestDialog(tk.Toplevel):
         self.owner = owner
         self.title("New delivery request")
         self.transient(owner.root)
-        self.geometry("850x700")
-        self.minsize(760, 630)
+        self.geometry("880x760")
+        self.minsize(780, 700)
         self.parcels: list[dict[str, str]] = []
         self.customer_variables: dict[str, tk.StringVar] = {}
         self.parcel_variables: dict[str, tk.StringVar] = {}
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        body = ttk.Frame(self, padding=20)
+        body = ttk.Frame(self, padding=16)
         body.grid(sticky="nsew")
         body.columnconfigure(1, weight=1)
-        body.rowconfigure(8, weight=1)
         ttk.Label(body, text="Customer and delivery", style="Section.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 12)
         )
@@ -155,21 +154,25 @@ class NewRequestDialog(tk.Toplevel):
             ("customer_name", "Customer name"),
             ("email", "Email"),
             ("phone", "Phone"),
+            ("pickup_address", "Pickup street / delivery address"),
             ("pickup", "Pickup suburb"),
+            ("destination_address", "Destination street / delivery address"),
             ("destination", "Destination suburb"),
         )
         for row, (key, label) in enumerate(fields, start=1):
-            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=3)
             variable = tk.StringVar(self)
             self.customer_variables[key] = variable
             ttk.Entry(body, textvariable=variable).grid(
-                row=row, column=1, sticky="ew", pady=4, padx=(12, 0)
+                row=row, column=1, sticky="ew", pady=3, padx=(12, 0)
             )
+        parcel_row = len(fields) + 1
+        body.rowconfigure(parcel_row + 2, weight=1)
         ttk.Label(body, text="Parcels", style="Section.TLabel").grid(
-            row=6, column=0, columnspan=2, sticky="w", pady=(18, 8)
+            row=parcel_row, column=0, columnspan=2, sticky="w", pady=(14, 8)
         )
         editor = ttk.Frame(body)
-        editor.grid(row=7, column=0, columnspan=2, sticky="ew")
+        editor.grid(row=parcel_row + 1, column=0, columnspan=2, sticky="ew")
         for column, (key, label) in enumerate(self.PARCEL_FIELDS):
             editor.columnconfigure(column, weight=3 if column == 0 else 1)
             ttk.Label(editor, text=label).grid(
@@ -184,14 +187,14 @@ class NewRequestDialog(tk.Toplevel):
             row=1, column=5, pady=(4, 8)
         )
         list_frame = ttk.Frame(body)
-        list_frame.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        list_frame.grid(row=parcel_row + 2, column=0, columnspan=2, sticky="nsew")
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
         self.parcel_tree = ttk.Treeview(
             list_frame,
             columns=("description", "weight", "dimensions"),
             show="headings",
-            height=5,
+            height=4,
             selectmode="browse",
         )
         self.parcel_tree.heading("description", text="Description")
@@ -204,21 +207,25 @@ class NewRequestDialog(tk.Toplevel):
         scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.parcel_tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
         self.parcel_tree.configure(yscrollcommand=scroll.set)
-        ttk.Button(body, text="Remove selected parcel", command=self._remove_parcel).grid(
-            row=9, column=0, columnspan=2, sticky="w", pady=(8, 0)
+        parcel_actions = ttk.Frame(body)
+        parcel_actions.grid(row=parcel_row + 3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Button(parcel_actions, text="Edit selected parcel", command=self._edit_parcel).pack(
+            side="left", padx=(0, 8)
         )
+        ttk.Button(parcel_actions, text="Remove selected parcel", command=self._remove_parcel).pack(side="left")
         self.error = tk.StringVar(self)
         ttk.Label(body, textvariable=self.error, foreground="#a32121", wraplength=760).grid(
-            row=10, column=0, columnspan=2, sticky="w", pady=(10, 0)
+            row=parcel_row + 4, column=0, columnspan=2, sticky="w", pady=(10, 0)
         )
         ttk.Label(
             body,
             text="Sample service area: Melbourne, Richmond, Footscray, Hawthorn, Carlton, St Kilda, "
-                 "Brunswick, South Yarra, Docklands and Southbank. Add each parcel before saving.",
+                 "Brunswick, South Yarra, Docklands and Southbank. Enter the full delivery addresses "
+                 "separately from suburbs. Add each parcel before saving.",
             wraplength=760,
-        ).grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ).grid(row=parcel_row + 5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         buttons = ttk.Frame(body)
-        buttons.grid(row=12, column=0, columnspan=2, sticky="e", pady=(15, 0))
+        buttons.grid(row=parcel_row + 6, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side="left", padx=8)
         ttk.Button(buttons, text="Create request", command=self._save).pack(side="left")
         self.bind("<Escape>", lambda _event: self.destroy())
@@ -229,13 +236,18 @@ class NewRequestDialog(tk.Toplevel):
         if not all(parcel.values()):
             self.error.set("Enter all five parcel fields, then choose Add parcel.")
             return
+        try:
+            self.owner.app.validate_parcel(parcel)
+        except EXPECTED_ERRORS as error:
+            self.error.set(str(error))
+            return
         self.parcels.append(parcel)
-        self._redraw_parcels()
+        self._redraw_parcels(len(self.parcels) - 1)
         for variable in self.parcel_variables.values():
             variable.set("")
         self.error.set("")
 
-    def _redraw_parcels(self) -> None:
+    def _redraw_parcels(self, selected_index: int | None = None) -> None:
         self.parcel_tree.delete(*self.parcel_tree.get_children())
         for index, parcel in enumerate(self.parcels):
             dimensions = " × ".join(parcel[key] for key in ("length_cm", "width_cm", "height_cm"))
@@ -243,12 +255,48 @@ class NewRequestDialog(tk.Toplevel):
                 "", "end", iid=str(index),
                 values=(parcel["description"], parcel["weight_kg"], dimensions),
             )
+        if self.parcels and selected_index is not None:
+            identifier = str(min(selected_index, len(self.parcels) - 1))
+            self.parcel_tree.selection_set(identifier)
+            self.parcel_tree.focus(identifier)
+            self.parcel_tree.see(identifier)
+
+    def _edit_parcel(self) -> None:
+        selected = self.parcel_tree.selection()
+        if not selected:
+            self.error.set("Select a parcel from the list to edit it.")
+            return
+        index = int(selected[0])
+        original = self.parcels[index]
+
+        def save(values: dict[str, str]) -> None:
+            self.owner.app.validate_parcel(values)
+            self.parcels[index] = dict(values)
+            self._redraw_parcels(index)
+            self.error.set("")
+
+        dialog = FormDialog(
+            self, "Edit parcel",
+            [(key, label, original[key]) for key, label in self.PARCEL_FIELDS],
+            save,
+            explanation="Changes apply to this unsaved parcel only after validation. "
+                        "Cancel keeps its original values.",
+            button_text="Save parcel",
+        )
+
+        def restore_modal(event: tk.Event) -> None:
+            if event.widget is dialog and self.winfo_exists():
+                self.grab_set()
+
+        dialog.bind("<Destroy>", restore_modal)
 
     def _remove_parcel(self) -> None:
         selected = self.parcel_tree.selection()
         if selected:
-            del self.parcels[int(selected[0])]
-            self._redraw_parcels()
+            index = int(selected[0])
+            del self.parcels[index]
+            self._redraw_parcels(index)
+            self.error.set("")
 
     def _save(self) -> None:
         if any(variable.get().strip() for variable in self.parcel_variables.values()):
@@ -332,6 +380,7 @@ class MainWindow:
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         actions = (
             ("New request", lambda: NewRequestDialog(self)),
+            ("Edit addresses", self._edit_addresses),
             ("Prepare quote", self._quote),
             ("Accept quote", lambda: self._respond(True)),
             ("Decline quote", lambda: self._respond(False)),
@@ -594,6 +643,30 @@ class MainWindow:
                         "they do not reserve a worker. Times are editable. Enter YYYY-MM-DD HH:MM. "
                         "The quoted amount is calculated by the application.",
             button_text="Prepare quote",
+        )
+
+    def _edit_addresses(self) -> None:
+        request_id = self._selected_request()
+        if request_id is None:
+            return
+        row = self.request_rows[request_id]
+
+        def save(values: dict[str, str]) -> None:
+            self.app.update_request_addresses(
+                request_id, values["pickup_address"], values["destination_address"]
+            )
+            self.refresh()
+            self.status.set(f"Delivery addresses corrected for {request_id}; service suburbs retained.")
+
+        FormDialog(
+            self.root, "Edit delivery addresses",
+            [("pickup_address", "Pickup street / delivery address", _display(row.get("pickup_address"))),
+             ("destination_address", "Destination street / delivery address", _display(row.get("destination_address")))],
+            save,
+            explanation=f"Service suburbs: {row.get('pickup', '')} to {row.get('destination', '')}. "
+                        "Addresses can be corrected only while the request is Requested, before quotation. "
+                        "Blank fields indicate an address has not been recorded.",
+            button_text="Save addresses",
         )
 
     def _respond(self, accepted: bool) -> None:

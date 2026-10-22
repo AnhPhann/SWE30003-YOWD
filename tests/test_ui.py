@@ -7,10 +7,13 @@ required; environments without a display report a specific skipped test reason.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 from yowd.application import YowdApplication
+from yowd.storage import SQLiteStore
 
 try:
     import tkinter as tk
@@ -42,8 +45,8 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.window = MainWindow(self.root, self.app)
         self.root.update_idletasks()
 
-    def dialog(self) -> FormDialog:
-        windows = [item for item in self.root.winfo_children() if isinstance(item, FormDialog)]
+    def dialog(self, parent: tk.Misc | None = None) -> FormDialog:
+        windows = [item for item in (parent or self.root).winfo_children() if isinstance(item, FormDialog)]
         self.assertEqual(len(windows), 1)
         windows[0].withdraw()
         return windows[0]
@@ -115,6 +118,8 @@ class DesktopIntegrationTests(unittest.TestCase):
         values = {
             "customer_name": "Anh Phan", "email": "invalid-email", "phone": "0400000001",
             "pickup": "Richmond", "destination": "Footscray",
+            "pickup_address": "Richmond Library, Church Street",
+            "destination_address": "Footscray Library, Paisley Street",
         }
         for key, value in values.items():
             dialog.customer_variables[key].set(value)
@@ -132,6 +137,155 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.assertFalse(dialog.winfo_exists())
         self.assertEqual(len(self.app.overview()["requests"]), 1)
         self.assertEqual(len(self.window.request_tree.get_children()), 1)
+
+    def test_new_request_requires_real_addresses_then_preserves_suburbs(self) -> None:
+        dialog = NewRequestDialog(self.window)
+        dialog.withdraw()
+        self.assertIn("pickup_address", dialog.customer_variables)
+        self.assertIn("destination_address", dialog.customer_variables)
+        values = {
+            "customer_name": "Anh Phan", "email": "anh@example.com", "phone": "0400000001",
+            "pickup": "Richmond", "destination": "Footscray",
+            "pickup_address": "Richmond Library, Church Street", "destination_address": "",
+        }
+        for key, value in values.items():
+            dialog.customer_variables[key].set(value)
+        for key, variable in dialog.parcel_variables.items():
+            variable.set("Books" if key == "description" else "2")
+        self.invoke(dialog, "Add parcel")
+        self.invoke(dialog, "Create request")
+        self.assertTrue(dialog.winfo_exists())
+        self.assertTrue(dialog.error.get())
+        self.assertFalse(self.app.overview()["requests"])
+        self.assertEqual(dialog.customer_variables["pickup_address"].get(), "Richmond Library, Church Street")
+        dialog.customer_variables["destination_address"].set("Footscray Library, Paisley Street")
+        self.invoke(dialog, "Create request")
+        self.assertFalse(dialog.winfo_exists())
+        row = self.app.overview()["requests"][0]
+        self.assertEqual((row["pickup"], row["destination"]), ("Richmond", "Footscray"))
+        details = self.app.request_details(row["id"])
+        self.assertIn("Richmond Library, Church Street", details)
+        self.assertIn("Footscray Library, Paisley Street", details)
+
+    def test_invalid_parcel_is_rejected_before_entering_unsaved_list(self) -> None:
+        dialog = NewRequestDialog(self.window)
+        dialog.withdraw()
+        for bad_weight in ("0", "-1", "not-a-number", "NaN", "Infinity"):
+            with self.subTest(weight=bad_weight):
+                for key, variable in dialog.parcel_variables.items():
+                    variable.set("Books" if key == "description" else "2")
+                dialog.parcel_variables["weight_kg"].set(bad_weight)
+                self.invoke(dialog, "Add parcel")
+                self.assertEqual(dialog.parcels, [])
+                self.assertTrue(dialog.error.get())
+                self.assertEqual(dialog.parcel_variables["weight_kg"].get(), bad_weight)
+        self.assertFalse(self.app.overview()["requests"])
+
+    def test_edit_parcel_rejects_invalid_change_and_preserves_other_parcels(self) -> None:
+        dialog = NewRequestDialog(self.window)
+        dialog.withdraw()
+        for description in ("Books", "Clothing"):
+            for key, variable in dialog.parcel_variables.items():
+                variable.set(description if key == "description" else "2")
+            self.invoke(dialog, "Add parcel")
+        dialog.parcel_tree.selection_set("0")
+        self.invoke(dialog, "Edit selected parcel")
+        editor = self.dialog(dialog)
+        self.assertEqual(editor.variables["description"].get(), "Books")
+        self.fill(editor, weight_kg="-5")
+        self.invoke(editor, "Save parcel")
+        self.assertTrue(editor.winfo_exists())
+        self.assertEqual([item["weight_kg"] for item in dialog.parcels], ["2", "2"])
+        self.fill(editor, description="Updated books", weight_kg="3")
+        self.invoke(editor, "Save parcel")
+        self.assertFalse(editor.winfo_exists())
+        self.assertEqual([item["description"] for item in dialog.parcels], ["Updated books", "Clothing"])
+        self.assertEqual([item["weight_kg"] for item in dialog.parcels], ["3", "2"])
+        self.assertFalse(self.app.overview()["requests"])
+
+    def test_cancel_parcel_edit_keeps_original_unsaved_parcel(self) -> None:
+        dialog = NewRequestDialog(self.window)
+        dialog.withdraw()
+        for key, variable in dialog.parcel_variables.items():
+            variable.set("Books" if key == "description" else "2")
+        self.invoke(dialog, "Add parcel")
+        dialog.parcel_tree.selection_set("0")
+        self.invoke(dialog, "Edit selected parcel")
+        editor = self.dialog(dialog)
+        self.fill(editor, description="Not saved", weight_kg="9")
+        self.invoke(editor, "Cancel")
+        self.assertEqual(dialog.parcels[0]["description"], "Books")
+        self.assertEqual(dialog.parcels[0]["weight_kg"], "2")
+        self.assertFalse(self.app.overview()["requests"])
+
+    def test_request_addresses_can_be_corrected_before_quote_and_cancelled(self) -> None:
+        request_id, _staff_id = self.seed_and_select()
+        self.invoke(self.root, "Edit addresses")
+        dialog = self.dialog()
+        old_pickup = dialog.variables["pickup_address"].get()
+        self.assertTrue(old_pickup)
+        self.fill(dialog, pickup_address="Cancelled change")
+        self.invoke(dialog, "Cancel")
+        self.assertEqual(self.app.overview()["requests"][0]["pickup_address"], old_pickup)
+        self.invoke(self.root, "Edit addresses")
+        dialog = self.dialog()
+        self.fill(dialog, pickup_address="Richmond Library loading bay", destination_address="")
+        self.invoke(dialog, "Save addresses")
+        self.assertTrue(dialog.winfo_exists())
+        self.assertTrue(dialog.error.get())
+        self.assertEqual(self.app.overview()["requests"][0]["pickup_address"], old_pickup)
+        self.fill(dialog, destination_address="Footscray Library reception")
+        self.invoke(dialog, "Save addresses")
+        row = self.app.overview()["requests"][0]
+        self.assertEqual(row["pickup_address"], "Richmond Library loading bay")
+        self.assertEqual((row["pickup"], row["destination"]), ("Richmond", "Footscray"))
+        self.assertIn("Footscray Library reception", self.app.request_details(request_id))
+
+    def test_address_edit_after_quotation_leaves_issued_offer_unchanged(self) -> None:
+        self.seed_and_select()
+        self.window._quote()
+        dialog = self.dialog()
+        self.invoke(dialog, "Prepare quote")
+        before = dict(self.app.overview()["requests"][0])
+        self.invoke(self.root, "Edit addresses")
+        dialog = self.dialog()
+        self.fill(dialog, pickup_address="Unpermitted change")
+        self.invoke(dialog, "Save addresses")
+        self.assertTrue(dialog.winfo_exists())
+        self.assertTrue(dialog.error.get())
+        self.assertEqual(self.app.overview()["requests"][0], before)
+
+    def test_legacy_requested_record_can_receive_missing_addresses(self) -> None:
+        request_id, _staff_id = self.seed_and_select()
+        snapshot = self.app.store.load()
+        snapshot["schema_version"] = 1
+        for record in snapshot["requests"]:
+            record.pop("pickup_address", None)
+            record.pop("destination_address", None)
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "legacy.sqlite3"
+        with SQLiteStore(path) as store:
+            store.save(snapshot)
+        restored = YowdApplication(path, clock=lambda: datetime(2026, 10, 22, 9))
+        self.addCleanup(restored.close)
+        self.window.app = restored
+        self.window.refresh(request_id=request_id)
+        self.assertIn("Not recorded", self.window.details.get("1.0", "end"))
+        self.invoke(self.root, "Edit addresses")
+        dialog = self.dialog()
+        self.assertEqual(dialog.variables["pickup_address"].get(), "")
+        self.assertEqual(dialog.variables["destination_address"].get(), "")
+        self.fill(
+            dialog, pickup_address="Richmond Library loading bay",
+            destination_address="Footscray Library reception",
+        )
+        self.invoke(dialog, "Save addresses")
+        self.assertFalse(dialog.winfo_exists())
+        row = restored.overview()["requests"][0]
+        self.assertEqual(row["status"], "Requested")
+        self.assertEqual(row["pickup_address"], "Richmond Library loading bay")
+        self.assertEqual((row["pickup"], row["destination"]), ("Richmond", "Footscray"))
 
     def test_parcel_editing_and_cancel_do_not_save_a_request(self) -> None:
         dialog = NewRequestDialog(self.window)
