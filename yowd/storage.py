@@ -16,7 +16,8 @@ import sqlite3
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = (1, SCHEMA_VERSION)
 
 
 class StorageError(RuntimeError):
@@ -153,10 +154,10 @@ class SQLiteStore:
         if not isinstance(snapshot, dict):
             raise StorageError("The application snapshot must be a JSON object.")
         version = snapshot.get("schema_version")
-        if type(version) is not int or version != SCHEMA_VERSION:
+        if type(version) is not int or version not in SUPPORTED_SCHEMA_VERSIONS:
             raise StorageError(
                 f"Unsupported snapshot schema version {version!r}; "
-                f"expected {SCHEMA_VERSION}."
+                "expected 1 or 2."
             )
 
     @staticmethod

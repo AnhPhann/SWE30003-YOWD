@@ -117,8 +117,81 @@ class SerializationTests(unittest.TestCase):
                 self.assertEqual(encode_state(*decode_state(snapshot)), snapshot)
 
     def test_empty_graph_round_trips(self):
-        snapshot = {"schema_version": 1, "customers": [], "staff": [], "requests": []}
+        snapshot = {"schema_version": 2, "customers": [], "staff": [], "requests": []}
         self.assertEqual(encode_state(*decode_state(snapshot)), snapshot)
+
+    def test_version_two_round_trip_preserves_addresses_and_shared_history(self):
+        graph = make_graph(history=True, two_requests=True)
+        for request in graph[2].values():
+            request.pickup_address = "12 Swan Street"
+            request.destination_address = "8 Hopkins Street"
+        snapshot = encode_state(*graph)
+        self.assertEqual(snapshot["schema_version"], 2)
+        self.assertEqual(snapshot["requests"][0]["pickup_address"], "12 Swan Street")
+        self.assertEqual(snapshot["requests"][0]["destination_address"], "8 Hopkins Street")
+        customers, _, requests = decode_state(snapshot)
+        first, second = requests.values()
+        self.assertEqual((first.pickup_address, first.destination_address),
+                         ("12 Swan Street", "8 Hopkins Street"))
+        self.assertIs(first.customer, customers["C1"])
+        self.assertIs(first.customer, second.customer)
+        self.assertEqual(len(first.assignments), 2)
+        self.assertEqual(first.payment.received_amount, Decimal("20.00"))
+
+    def test_version_one_lifecycle_graphs_migrate_without_inventing_addresses(self):
+        for status in RequestStatus:
+            with self.subTest(status=status):
+                legacy = self.snapshot(status.value)
+                legacy["schema_version"] = 1
+                for row in legacy["requests"]:
+                    row.pop("pickup_address", None)
+                    row.pop("destination_address", None)
+                before = deepcopy(legacy)
+                graph = decode_state(legacy)
+                self.assertEqual(legacy, before)
+                request = graph[2]["R1"]
+                self.assertEqual(getattr(request, "pickup_address", None), "")
+                self.assertEqual(getattr(request, "destination_address", None), "")
+                self.assertEqual(request.status, status)
+                migrated = encode_state(*graph)
+                self.assertEqual(migrated["schema_version"], 2)
+                self.assertEqual(migrated["requests"][0]["pickup_address"], "")
+                self.assertEqual(migrated["requests"][0]["destination_address"], "")
+                comparable = deepcopy(migrated)
+                comparable["schema_version"] = 1
+                for row in comparable["requests"]:
+                    del row["pickup_address"], row["destination_address"]
+                self.assertEqual(comparable, legacy)
+
+    def test_version_two_requests_require_both_address_fields(self):
+        for field in ("pickup_address", "destination_address"):
+            with self.subTest(field=field):
+                snapshot = self.snapshot("Requested")
+                snapshot["schema_version"] = 2
+                snapshot["requests"][0].update(
+                    pickup_address="12 Swan Street", destination_address="8 Hopkins Street"
+                )
+                del snapshot["requests"][0][field]
+                self.assert_invalid(snapshot, "missing fields")
+
+    def test_version_two_rejects_partial_and_non_text_addresses(self):
+        for pickup, destination in (("12 Swan Street", ""), ("", "8 Hopkins Street"),
+                                    (None, "8 Hopkins Street"), ("12 Swan Street", 8)):
+            with self.subTest(pickup=pickup, destination=destination):
+                snapshot = self.snapshot("Requested")
+                snapshot["schema_version"] = 2
+                snapshot["requests"][0].update(
+                    pickup_address=pickup, destination_address=destination
+                )
+                self.assert_invalid(snapshot, "address")
+
+    def test_encoding_rejects_partial_addresses_without_mutating_live_graph(self):
+        graph = make_graph("Requested")
+        request = graph[2]["R1"]
+        request.pickup_address, request.destination_address = "12 Swan Street", ""
+        with self.assertRaisesRegex(StorageError, "address"):
+            encode_state(*graph)
+        self.assertEqual((request.pickup_address, request.destination_address), ("12 Swan Street", ""))
 
     def test_encoding_and_decoding_do_not_mutate_inputs(self):
         graph = make_graph(history=True)
@@ -187,7 +260,7 @@ class SerializationTests(unittest.TestCase):
         self.assert_invalid(snapshot, "unsupported fields")
 
     def test_unsupported_schema_versions_are_rejected(self):
-        for version in (None, True, "1", 2):
+        for version in (None, True, "1", 99):
             with self.subTest(version=version):
                 snapshot = self.snapshot()
                 snapshot["schema_version"] = version

@@ -1,10 +1,12 @@
-"""Convert the complete domain graph to and from the version-one snapshot.
+"""Write version-two domain snapshots and read both current and legacy snapshots.
 
 Money and measurements use decimal strings; timestamps use naive local ISO
 datetimes. Staff schedules are lists of [start, end] timestamp pairs. Requests
 own their parcels, offer, retained assignments and payment. Customer and worker
 indexes are checked against that graph rather than silently repaired. Historical
 allocations are not reassessed against a worker's current employment or hours.
+Legacy version-one requests retain unknown addresses as blank pairs. Loading
+never writes or invents street addresses from a suburb name.
 """
 
 from datetime import datetime
@@ -16,7 +18,7 @@ from .models import (
     DeliveryRequest, DeliveryStaff, DomainError, Parcel, ParcelStatus, PaymentRecord,
     QuoteDecision, RequestStatus, StaffList,
 )
-from .storage import StorageError
+from .storage import SCHEMA_VERSION, SUPPORTED_SCHEMA_VERSIONS, StorageError
 
 
 def _object(value: Any, fields: set[str], label: str) -> dict:
@@ -270,8 +272,9 @@ def _check_lifecycle(request: DeliveryRequest) -> None:
 def decode_state(snapshot: dict) -> tuple[dict[str, Customer], StaffList, dict[str, DeliveryRequest]]:
     """Restore and validate an untrusted snapshot without changing its contents."""
     snapshot = _object(snapshot, {"schema_version", "customers", "staff", "requests"}, "Snapshot")
-    if type(snapshot["schema_version"]) is not int or snapshot["schema_version"] != 1:
-        raise StorageError("Unsupported snapshot schema version; expected 1.")
+    version = snapshot["schema_version"]
+    if type(version) is not int or version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise StorageError("Unsupported snapshot schema version; expected 1 or 2.")
 
     customers: dict[str, Customer] = {}
     declared_requests: dict[str, list[str]] = {}
@@ -315,10 +318,13 @@ def decode_state(snapshot: dict) -> tuple[dict[str, Customer], StaffList, dict[s
     graph_requests = {customer_id: set() for customer_id in customers}
     graph_assignments = {staff_id: set() for staff_id in workers}
     for row in _list(snapshot["requests"], "Requests"):
-        row = _object(row, {
+        fields = {
             "request_id", "customer_id", "pickup", "destination", "parcels", "created_at", "status",
             "quote", "assignments", "payment", "picked_up_at", "completed_at", "failure_reason",
-        }, "Request")
+        }
+        if version == 2:
+            fields.update({"pickup_address", "destination_address"})
+        row = _object(row, fields, "Request")
         request_id = _identifier(row["request_id"], "Request ID")
         customer_id = _identifier(row["customer_id"], "Request customer ID")
         if request_id in requests:
@@ -327,8 +333,14 @@ def decode_state(snapshot: dict) -> tuple[dict[str, Customer], StaffList, dict[s
             raise StorageError(f"Request {request_id} refers to an unknown customer: {customer_id}.")
         request = _construct(DeliveryRequest, {
             "request_id": request_id, "customer": customers[customer_id],
-            "pickup": _text(row["pickup"], "Pickup address"),
-            "destination": _text(row["destination"], "Destination address"),
+            "pickup": _text(row["pickup"], "Pickup suburb"),
+            "destination": _text(row["destination"], "Destination suburb"),
+            "pickup_address": (
+                _text(row["pickup_address"], "Pickup address", blank=True) if version == 2 else ""
+            ),
+            "destination_address": (
+                _text(row["destination_address"], "Destination address", blank=True) if version == 2 else ""
+            ),
             "parcels": _decode_parcels(row["parcels"], seen["parcel"]),
             "created_at": _time(row["created_at"], "Request creation"),
             "status": _text(row["status"], "Request status"),
@@ -403,6 +415,8 @@ def encode_state(
             request_rows.append({
                 "request_id": request.request_id, "customer_id": request.customer.customer_id,
                 "pickup": request.pickup, "destination": request.destination,
+                "pickup_address": request.pickup_address,
+                "destination_address": request.destination_address,
                 "created_at": _encode_time(request.created_at), "status": RequestStatus(request.status).value,
                 "picked_up_at": _encode_time(request.picked_up_at),
                 "completed_at": _encode_time(request.completed_at), "failure_reason": request.failure_reason,
@@ -432,6 +446,9 @@ def encode_state(
             })
     except (AttributeError, TypeError, ValueError) as exc:
         raise StorageError(f"Cannot encode the domain state: {exc}") from exc
-    snapshot = {"schema_version": 1, "customers": customer_rows, "staff": staff_rows, "requests": request_rows}
+    snapshot = {
+        "schema_version": SCHEMA_VERSION, "customers": customer_rows,
+        "staff": staff_rows, "requests": request_rows,
+    }
     decode_state(snapshot)
     return snapshot

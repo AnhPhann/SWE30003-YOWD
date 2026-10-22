@@ -29,6 +29,8 @@ class DeliveryRequest:
     picked_up_at: datetime | None = None
     completed_at: datetime | None = None
     failure_reason: str = ""
+    pickup_address: str = ""
+    destination_address: str = ""
 
     def __post_init__(self) -> None:
         self.validate()
@@ -38,8 +40,11 @@ class DeliveryRequest:
     def validate(self) -> None:
         """Validate details and retained-record identities, including restored data."""
         request_id = require_text(self.request_id, "Request ID")
-        pickup = require_text(self.pickup, "Pickup address")
-        destination = require_text(self.destination, "Destination address")
+        pickup = require_text(self.pickup, "Pickup suburb")
+        destination = require_text(self.destination, "Destination suburb")
+        pickup_address, destination_address = self._address_pair(
+            self.pickup_address, self.destination_address
+        )
         local_datetime(self.created_at, "Request creation")
         if not isinstance(self.customer, Customer):
             raise DomainError("A request must belong to one customer.")
@@ -80,7 +85,30 @@ class DeliveryRequest:
         if self.completed_at and self.picked_up_at and self.completed_at < self.picked_up_at:
             raise DomainError("Delivery completion cannot precede pickup.")
         self.request_id, self.pickup, self.destination = request_id, pickup, destination
+        self.pickup_address, self.destination_address = pickup_address, destination_address
         self.status = status
+
+    @staticmethod
+    def _address_pair(pickup_address: str, destination_address: str) -> tuple[str, str]:
+        """Allow unknown legacy addresses as a pair, never a partial address pair."""
+        if not isinstance(pickup_address, str) or not isinstance(destination_address, str):
+            raise DomainError("Pickup and destination addresses must be text.")
+        pickup_address, destination_address = pickup_address.strip(), destination_address.strip()
+        if bool(pickup_address) != bool(destination_address):
+            raise DomainError("Provide both pickup and destination addresses.")
+        return pickup_address, destination_address
+
+    @property
+    def has_full_addresses(self) -> bool:
+        """Whether actual addresses are known instead of legacy suburb-only data."""
+        return bool(self.pickup_address and self.destination_address)
+
+    def update_addresses(self, pickup_address: str, destination_address: str) -> None:
+        """Repair or correct addresses before quoting; validate both before mutation."""
+        self._require_status(RequestStatus.REQUESTED)
+        pickup_address = require_text(pickup_address, "Pickup address")
+        destination_address = require_text(destination_address, "Destination address")
+        self.pickup_address, self.destination_address = pickup_address, destination_address
 
     @property
     def active_assignment(self) -> DeliveryAssignment | None:

@@ -1,6 +1,7 @@
 """Portable persistence tests using temporary databases only."""
 
 from contextlib import closing
+import json
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -58,6 +59,30 @@ class SQLiteStoreTests(unittest.TestCase):
         with self.open_store() as reopened:
             self.assertEqual(reopened.load(), original)
 
+    def test_version_two_snapshot_can_be_saved_and_reopened(self) -> None:
+        snapshot = make_snapshot()
+        snapshot["schema_version"] = 2
+        snapshot["requests"][0].update(
+            pickup_address="12 Swan Street", destination_address="8 Hopkins Street"
+        )
+        try:
+            with self.open_store() as store:
+                store.save(snapshot)
+        except StorageError as error:
+            self.fail(f"The current snapshot schema must be writable: {error}")
+        with self.open_store() as reopened:
+            self.assertEqual(reopened.load(), snapshot)
+
+    def test_loading_legacy_snapshot_does_not_rewrite_or_advance_revision(self) -> None:
+        encoded = json.dumps(make_snapshot())
+        self.write_raw_snapshot(encoded)
+        with self.open_store() as store:
+            self.assertEqual(store.load(), make_snapshot())
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT revision, snapshot FROM application_state"
+            ).fetchone(), (1, encoded))
+
     def test_multiple_saves_advance_revision(self) -> None:
         store = self.open_store()
         store.save(make_snapshot("First"))
@@ -93,7 +118,7 @@ class SQLiteStoreTests(unittest.TestCase):
 
     def test_save_rejects_non_object_and_unsupported_versions(self) -> None:
         store = self.open_store()
-        for snapshot in ([], {}, {"schema_version": 2}, {"schema_version": True}):
+        for snapshot in ([], {}, {"schema_version": 99}, {"schema_version": True}):
             with self.subTest(snapshot=snapshot):
                 with self.assertRaises(StorageError):
                     store.save(snapshot)

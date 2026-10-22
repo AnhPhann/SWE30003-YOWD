@@ -51,6 +51,59 @@ class DomainTests(unittest.TestCase):
     def pickup(self, request):
         request.record_pickup(self.worker.staff_id, True, self.payment(request), self.now + timedelta(hours=1))
 
+    def addressed_request(self, pickup_address="12 Swan Street", destination_address="8 Hopkins Street"):
+        self.assertIn("pickup_address", DeliveryRequest.__dataclass_fields__)
+        self.assertIn("destination_address", DeliveryRequest.__dataclass_fields__)
+        base = self.request()
+        return DeliveryRequest(
+            base.request_id, self.customer, base.pickup, base.destination, base.parcels, self.now,
+            pickup_address=pickup_address, destination_address=destination_address,
+        )
+
+    def test_legacy_request_keeps_addresses_unknown(self):
+        request = self.request()
+        self.assertEqual(getattr(request, "pickup_address", None), "")
+        self.assertEqual(getattr(request, "destination_address", None), "")
+        self.assertIs(getattr(request, "has_full_addresses", None), False)
+
+    def test_request_trims_full_addresses_without_changing_suburbs(self):
+        request = self.addressed_request("  Unit 2, 12 Swan Street  ", "  8 Hopkins Street ")
+        self.assertEqual(request.pickup_address, "Unit 2, 12 Swan Street")
+        self.assertEqual(request.destination_address, "8 Hopkins Street")
+        self.assertEqual((request.pickup, request.destination), ("Richmond", "Footscray"))
+        self.assertTrue(request.has_full_addresses)
+
+    def test_request_rejects_partial_or_non_text_address_pairs(self):
+        self.assertIn("pickup_address", DeliveryRequest.__dataclass_fields__)
+        for pickup, destination in (("12 Swan Street", ""), (" ", "8 Hopkins Street"),
+                                    (None, "8 Hopkins Street"), ("12 Swan Street", 8)):
+            with self.subTest(pickup=pickup, destination=destination), self.assertRaises(DomainError):
+                self.addressed_request(pickup, destination)
+
+    def test_requested_addresses_can_be_updated_and_invalid_update_is_atomic(self):
+        request = self.request()
+        self.assertTrue(callable(getattr(request, "update_addresses", None)))
+        request.update_addresses("  12 Swan Street  ", " 8 Hopkins Street ")
+        self.assertEqual((request.pickup_address, request.destination_address),
+                         ("12 Swan Street", "8 Hopkins Street"))
+        for pickup, destination in (("20 Swan Street", ""), (None, "9 Hopkins Street"), ("", "")):
+            with self.subTest(pickup=pickup, destination=destination), self.assertRaises(DomainError):
+                request.update_addresses(pickup, destination)
+            self.assertEqual((request.pickup_address, request.destination_address),
+                             ("12 Swan Street", "8 Hopkins Street"))
+
+    def test_addresses_cannot_be_changed_after_quotation(self):
+        for status in RequestStatus:
+            if status == RequestStatus.REQUESTED:
+                continue
+            request = self.addressed_request()
+            request.status = status
+            self.assertTrue(callable(getattr(request, "update_addresses", None)))
+            with self.subTest(status=status), self.assertRaises(DomainError):
+                request.update_addresses("20 Swan Street", "9 Hopkins Street")
+            self.assertEqual((request.pickup_address, request.destination_address),
+                             ("12 Swan Street", "8 Hopkins Street"))
+
     def test_complete_multi_parcel_workflow_and_completion_statistics(self):
         request = self.allocated()
         self.pickup(request)
