@@ -1,6 +1,6 @@
 # Starter design decisions
 
-This records the initial implementation choices made while translating the team's A2 model into runnable code. It is a starting point for review and A3 reflection. Update it when the team changes a rule, and link the final decision to the relevant code and tests.
+This records the implementation choices made while translating the team's A2 model into runnable code. Update it when a business rule changes, with the affected code and tests.
 
 ## 1. Python desktop application
 
@@ -23,7 +23,7 @@ Supporting code is explicit:
 - `SQLiteStore` handles atomic persistence and detects conflicting saved revisions.
 - Tkinter windows and dialogs are interface components, not extra business entities.
 
-These support classes and modules exist because input, persistence and startup responsibilities were intentionally excluded from the high-level A2 diagram. The final A3 detailed design should show the supporting implementation elements actually retained by the team.
+These support classes and modules implement input, persistence and startup responsibilities outside the ten business entities.
 
 ## 3. Assignment and payment multiplicities
 
@@ -53,7 +53,11 @@ The configured demonstration suburbs and zones are:
 - West: Footscray.
 - South: St Kilda, South Yarra.
 
-This is a deliberately limited service configuration. It does not establish coverage for all Greater Melbourne addresses. The current input records suburbs rather than complete street addresses. A request outside the configured area is rejected before quotation, with its rejection reason retained.
+This is a deliberately limited service configuration. It does not establish coverage for all Greater Melbourne addresses. A request outside the configured area is rejected before quotation, with its rejection reason retained.
+
+The request-entry refinement now stores complete pickup and destination address text separately from the existing `pickup` and `destination` suburb keys. `pickup_address` and `destination_address` are appended to DeliveryRequest's default fields so existing positional constructor calls retain their meaning. Address text is trimmed; a partial pair or non-text value is invalid. New requests through the application require both addresses. The existing suburb keys continue to drive coverage and pricing, so an address string is not accidentally used as a tariff-zone lookup.
+
+`DeliveryRequest.update_addresses()` validates both values before changing either and permits corrections only while Requested. The application exposes that operation through **Edit addresses**. An issued quote therefore cannot silently keep its old amount and window after its delivery addresses change. Legacy Requested records can be repaired before quoting; their missing addresses are not guessed from suburb names.
 
 The sample AUD amount is:
 
@@ -98,24 +102,28 @@ Statistics are derived from requests and assignments. There is no separate table
 
 `SQLiteStore` writes a single schema-versioned JSON application snapshot inside one SQLite row. Each complete save is transactional. Revision comparison prevents an application instance from silently overwriting a state saved by another instance after it loaded its own copy. A conflict is reported rather than silently choosing a winner.
 
-This design gives the starter a small persistence boundary and preserves the object graph. It does not provide a normalised relational schema, per-record concurrent editing, user permissions or a multi-user service. The team should explain this trade-off honestly if it retains the design in the submitted system.
+New snapshots use schema 2 and include both address keys. The decoder and storage boundary continue to accept schema 1, restoring its unknown addresses as blank pairs while preserving lifecycle state, payments, assignments and shared customer identities. Schema 2 requires both keys and rejects invalid partial pairs. Loading an older file alone does not rewrite its snapshot or advance its revision; a successful later save writes schema 2. The older starter cannot read schema 2, so use a separate test database when comparing versions.
 
-## 10. Time, validation and evidence
+This design gives the starter a small persistence boundary and preserves the object graph. It does not provide a normalised relational schema, per-record concurrent editing, user permissions or a multi-user service.
+
+## 10. Time and validation
 
 All domain datetimes are naive local Melbourne values. Timezone-aware values are rejected to avoid mixing incompatible time representations. This is sufficient for the local demonstration scope but does not model multiple timezones or daylight-saving conversions.
 
 Money is finite, nonnegative Decimal data with cent precision. Parcel dimensions and weight must be finite and positive. Contact fields, time order, object identities and transition preconditions are validated before permitted business state changes.
 
-Tests exercise both successful paths and rejected actions, including history retention and authorisation. Test results are development evidence only. The team still needs to review the actual desktop experience, capture its final execution evidence and explain which A2 choices were retained or changed.
+Draft parcel rows use the same validation before being added or replaced. **Edit selected parcel** supports correction without creating a saved request, and cancellation leaves the previous parcel unchanged. Removing a row affects only the unsaved request draft.
+
+Tests exercise both successful paths and rejected actions, including history retention and authorisation. Hidden-window desktop tests check callbacks and widget state; visual layout and usability need separate inspection.
 
 ## Updating this record
 
 For each agreed improvement, record:
 
-1. The A2 responsibility, assumption or scenario concerned.
-2. The observed implementation issue or confirmation.
-3. The agreed decision and reason.
-4. The code and test that demonstrate it.
-5. Any remaining limitation the report must state.
+1. The responsibility, invariant or scenario concerned.
+2. The observed implementation issue.
+3. The decision and reason.
+4. The affected code and regression checks.
+5. Any remaining technical limitation.
 
-Use the team's actual decisions and results. Do not copy this starter record into the final reflection without checking it against the final implementation.
+Keep this record consistent with implemented behaviour and test results.

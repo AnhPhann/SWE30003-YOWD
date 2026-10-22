@@ -1,7 +1,8 @@
 # Local development checks
 
 Checked on 22 October 2026 using Windows, Python 3.12.14, Tk 8.6 and SQLite 3.53.1.
-These results describe this starter version, not the team's final submission.
+These results include the address and parcel-input refinement and describe
+the current local development version.
 
 ## Automated suite
 
@@ -9,20 +10,24 @@ These results describe this starter version, not the team's final submission.
 python -m unittest discover -s tests -v
 ```
 
-Result: **88 tests passed, none skipped**.
+Result: **114 tests passed, none skipped**.
 
-- 16 domain-rule tests.
-- 22 application and persistence-integration tests.
-- 25 object-graph serialization tests.
-- 17 SQLite storage tests.
-- 8 desktop integration tests using withdrawn Tk windows and the real application service.
+- 21 domain-rule tests.
+- 29 application and persistence-integration tests.
+- 30 object-graph serialization tests.
+- 19 SQLite storage tests.
+- 15 desktop integration tests using withdrawn Tk windows and the real application service.
 
 The checks include multiple parcels, quote validation and responses, allocation
 eligibility, overlapping-job policy, wrong-worker rejection, payment exceptions,
 separate office authorisation, failed pickup and retry, failed delivery, former
 workers, completion-date statistics, startup restoration, corrupt-data rejection,
 rollback after a failed save and stale-writer protection. Desktop tests also check
-input correction, parcel removal and cancellation without saving.
+input correction, parcel editing/removal and cancellation without saving. The
+address checks cover separate street/suburb fields, required addresses for new
+requests, Requested-only correction, failed-save rollback, save/reopen and
+schema 1 restoration without inventing addresses or rewriting on load. A legacy
+Requested record cannot be quoted until its missing addresses are supplied.
 
 ## Startup and demonstration
 
@@ -39,7 +44,6 @@ The hidden desktop startup check and Python compilation check both succeeded.
 
 ## Review still needed
 
-The team should inspect the desktop layout and usability on its own computers,
-agree the sample business policies, and record final execution evidence after
-making its changes. No standalone executable has been built. This package runs
-from Python source and needs Python with Tkinter installed.
+Hidden-window tests do not verify visible layout or usability on other computers.
+No standalone executable has been built. This package runs from Python source
+and needs Python with Tkinter installed.

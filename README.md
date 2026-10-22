@@ -1,6 +1,6 @@
 # YOWD delivery-management starter
 
-A local Python desktop application for SWE30003 Assignment 3, based on the team's Assignment 2 object design. It provides a working foundation for the team to inspect, run, test and improve. The A3 report, demonstration evidence, executable packaging and contribution record still need to be completed by the team.
+A local Python desktop application for SWE30003 Assignment 3, based on the team's Assignment 2 object design. It implements request lodgement, quotation, allocation, pickup/payment, delivery outcomes and local persistence.
 
 ## Run it
 
@@ -26,13 +26,15 @@ Use a separate database file for independent demonstration data:
 python run.py --db data/my-review.sqlite3
 ```
 
+Use a separate test database when reviewing this version alongside the older starter. New saves use snapshot schema 2, which the older starter cannot read. This version can load schema 1 without rewriting it merely on startup; a later successful change saves schema 2.
+
 Run the scripted terminal demonstration without changing an existing database:
 
 ```text
 python run.py --demo
 ```
 
-The scripted demonstration uses an in-memory database and advances a simulated clock to the quoted pickup and delivery times. It is a quick functional check, not a replacement for reviewing the desktop screens or recording assessment evidence.
+The scripted demonstration uses an in-memory database and advances a simulated clock to the quoted pickup and delivery times. It is a functional check; desktop usability needs a separate review.
 
 Run the test suite:
 
@@ -45,8 +47,8 @@ python -m unittest discover -s tests -v
 The desktop interface groups work into Delivery requests, Staff and availability, and Delivery statistics. Select a request to see its parcels, current quote, allocation history and payment outcome together.
 
 1. Register a worker and add an availability period covering a future delivery window. The **Load sample data** action provides demonstration records for an empty database.
-2. Create a customer request using one of the configured sample suburbs. Add at least one parcel with a description, weight and dimensions. Parcel rows can be removed before the request is submitted.
-3. Prepare a quote. Check its sample price and estimated window, then record the customer's acceptance or decline.
+2. Create a customer request with complete pickup and destination address text and separate configured suburbs. Add at least one parcel with a description, weight and dimensions. Invalid draft parcels are rejected immediately. Use **Edit selected parcel** to correct a row or remove it before submitting; cancellation preserves the previous draft.
+3. Use **Edit addresses** to correct a Requested delivery before preparing its quote. Then check the quote's sample price and estimated window and record acceptance or decline. Address changes after quotation are rejected so the existing offer keeps its original delivery context.
 4. Allocate an active worker whose schedule covers the full quoted window. An existing job in the same window does not, by itself, make the worker ineligible under the agreed A2 simplification.
 5. Record collection as the allocated worker. Matching payment allows pickup. A mismatched payment is retained as pending and requires an explicit office authorisation before the worker confirms pickup again.
 6. Record successful delivery or a failed delivery with a reason. Both close the active assignment. Failed delivery retains the pickup payment and flags the collected parcels as requiring return.
@@ -59,7 +61,8 @@ Also try invalid operations: zero parcel weight, an invalid email, an inactive w
 
 These are implementation assumptions for team review, not a real YOWD tariff or complete Melbourne service definition.
 
-- The configured sample service area is Melbourne, Docklands, Southbank, Carlton, Brunswick, Richmond, Hawthorn, Footscray, St Kilda and South Yarra. The first version captures suburbs rather than street-level addresses.
+- The configured sample service area is Melbourne, Docklands, Southbank, Carlton, Brunswick, Richmond, Hawthorn, Footscray, St Kilda and South Yarra. New requests require complete delivery-address text separately from these suburb keys; pricing and coverage still use suburbs.
+- Legacy records with no street addresses keep both address fields blank. The request details show that the information was not recorded. A legacy Requested delivery must be corrected through **Edit addresses** before it can be quoted; historical records are not assigned invented addresses.
 - The sample quote is AUD 10 base fee, plus AUD 2 per parcel, plus AUD 2 per total billable kilogram, plus a route charge of AUD 2 within one zone or AUD 5 across zones. Each parcel's billable weight is the greater of actual kilograms and `length_cm * width_cm * height_cm / 5000`. The total is rounded to cents.
 - Window estimation considers request age and active workers' availability. The scheduling policy uses a 15-minute lead time and 15-minute priority-rank increments. The estimated delivery duration is 60 minutes within a zone and 90 minutes across zones. A quote does not reserve a worker.
 - All datetimes are naive local Melbourne times. Enter desktop date/time values as `YYYY-MM-DD HH:MM` and statistics dates as `YYYY-MM-DD`.
@@ -67,9 +70,9 @@ These are implementation assumptions for team review, not a real YOWD tariff or 
 - Payments are simulated outcome records. Office authorisation records an entered name and reason; the starter does not authenticate that person.
 - A payment mismatch keeps the request Allocated and the parcels Pending. After office authorisation, the allocated worker must confirm pickup again. Recording authorisation alone does not change the delivery status.
 - Failed pickup creates no payment record and closes its assignment. An explicit office retry returns it to Accepted while retaining the previous assignment. Failed delivery preserves the payment already recorded at pickup.
-- SQLite stores one versioned JSON application snapshot. Revision checks prevent silent replacement of a newer snapshot by an older instance. This is a local starter persistence design, not a full relational data model or multi-user server.
+- SQLite stores one versioned JSON application snapshot. Schema 2 records both delivery addresses and accepts migrated legacy blank pairs. Schema 1 is still readable, and loading alone does not advance the saved revision or migrate its contents. Revision checks prevent silent replacement of a newer snapshot by an older instance. This is a local starter persistence design, not a full relational data model or multi-user server.
 
-The reasoning and A2 clarifications are recorded in [Design decisions](docs/DESIGN_DECISIONS.md). The [Team handoff](docs/TEAM_HANDOFF.md) names Anh Phan (Chip), Domenic Sesa (domirox), Hoa Phat Thai (flashman) and Patrick Lunney (PL), with proposed feature ownership, shared integration duties and completion criteria. Each member supplies their own tests, execution evidence and report material.
+Implementation rationale is recorded in [Design decisions](docs/DESIGN_DECISIONS.md). [Technical integration notes](docs/TEAM_HANDOFF.md) describe shared interfaces, snapshot compatibility and business invariants. [Verification results](docs/VERIFICATION.md) record the tested environment and checks.
 
 ## Code map
 
@@ -101,15 +104,11 @@ yowd/models/payment_record.py
 yowd/models/delivery_statistics.py
                              DeliveryStatistics
 tests/                       Domain, application, persistence and desktop checks
-docs/                        Design decisions and team handoff notes
+docs/                        Technical decisions, integration notes and checks
 ```
 
 Use [PEP 8](https://peps.python.org/pep-0008/) as the coding standard when extending the project. Keep business validation in the domain/application layer, rather than duplicating it inside a button callback. New business behaviour needs tests for both the intended outcome and rejected operations.
 
-## Before sharing or submitting
+## Runtime and packaging status
 
-Review the assumptions together, run the application on another member's computer, and record the actual test results. Complete the A3 design and reflection against the code the team finally submits. Capture screenshots or a narrated demonstration showing valid inputs, rejected inputs, corrections and successful outcomes. Prepare and verify the source/executable package required for submission. Include the complete submitted A2 report in the A3 appendix and complete the required cover sheet and contribution document using actual work records.
-
-Publishing, uploading and sharing remain the team's decision.
-
-For assistant actions, Anh's explicit permission is required before staging, committing, pushing, publishing, uploading, creating a pull request or changing sharing settings. Permission to edit local files does not grant permission for those actions. This restriction applies to assistants; human members use the group's agreed Git workflow.
+This source package requires Python with Tkinter installed. A standalone executable has not been built. Verify launch, database location and save/reopen on the target computer when preparing an executable package.
