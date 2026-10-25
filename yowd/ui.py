@@ -322,7 +322,7 @@ class MainWindow:
         self.snapshot: dict[str, Any] = {}
         self.request_rows: dict[str, dict[str, Any]] = {}
         self.staff_rows: dict[str, dict[str, Any]] = {}
-        root.title("YOWD | Delivery management")
+        root.title("YOWD | Delivery Management")
         root.geometry("1240x780")
         root.minsize(980, 680)
         style = ttk.Style(root)
@@ -339,12 +339,12 @@ class MainWindow:
         header = ttk.Frame(root, padding=(20, 15, 20, 12))
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
-        ttk.Label(header, text="YOWD delivery management", style="Title.TLabel").grid(
+        ttk.Label(header, text="YOWD Delivery Management", style="Title.TLabel").grid(
             row=0, column=0, sticky="w"
         )
         ttk.Label(
             header,
-            text="Local prototype • Simulated payment records • Dates use local Melbourne time",
+            text="Local Prototype • Simulated Payment Records • Dates use Local Melbourne Time",
             style="Muted.TLabel",
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
         ttk.Button(header, text="Load sample data", command=self._seed_demo).grid(
@@ -363,7 +363,7 @@ class MainWindow:
         footer = ttk.Frame(root, padding=(20, 10))
         footer.grid(row=2, column=0, sticky="ew")
         footer.columnconfigure(0, weight=1)
-        self.status = tk.StringVar(root, "Ready. Create a request and register staff, or load sample data.")
+        self.status = tk.StringVar(root, "Ready. Create a Request and Register Staff, or Load Sample Data.")
         ttk.Label(footer, textvariable=self.status, wraplength=1150).grid(sticky="w")
         self.storage = tk.StringVar(root)
         ttk.Label(footer, textvariable=self.storage, style="Muted.TLabel", wraplength=1150).grid(
@@ -379,17 +379,17 @@ class MainWindow:
         toolbar = ttk.Frame(tab)
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         actions = (
-            ("New request", lambda: NewRequestDialog(self)),
-            ("Edit addresses", self._edit_addresses),
-            ("Prepare quote", self._quote),
-            ("Accept quote", lambda: self._respond(True)),
-            ("Decline quote", lambda: self._respond(False)),
-            ("Allocate worker", self._allocate),
-            ("Record pickup", self._pickup),
-            ("Authorise payment exception", self._authorise),
+            ("New Request", lambda: NewRequestDialog(self)),
+            ("Edit Addresses", self._edit_addresses),
+            ("Prepare Quote", self._quote),
+            ("Accept Quote", lambda: self._respond(True)),
+            ("Decline Quote", lambda: self._respond(False)),
+            ("Allocate Worker", self._allocate),
+            ("Record Pickup", self._pickup),
+            ("Authorise Payment Exception", self._authorise),
             ("Delivered", lambda: self._delivery(True)),
-            ("Failed delivery", lambda: self._delivery(False)),
-            ("Retry pickup", self._retry_pickup),
+            ("Failed Delivery", lambda: self._delivery(False)),
+            ("Retry Pickup", self._retry_pickup),
         )
         for index, (label, callback) in enumerate(actions):
             ttk.Button(toolbar, text=label, command=callback).grid(
@@ -694,7 +694,7 @@ class MainWindow:
             self.status.set(f"Worker allocated to {request_id}.")
 
         self._worker_form(
-            "Allocate delivery worker",
+            "Allocate Delivery Worker",
             "The application checks request status, active assignments, employment and the quoted window.",
             save, button_text="Allocate",
         )
@@ -706,6 +706,16 @@ class MainWindow:
         row = self.request_rows.get(request_id, {})
         recorded_amount = row.get("received_amount")
         amount_default = recorded_amount if recorded_amount not in (None, "") else row.get("quote_amount")
+        # Reason Drop Down for Failure Selection
+        failures = {
+            f"Failed: {reason}": reason
+            for reason in ("Customer not present", "Parcel missing", "Parcel damaged", "Parcel does not match request")
+        }
+        # Return Drop Down List of All Parcel Names and Their ID
+        parcels = {
+            f"{description} | {parcel_id}": parcel_id 
+            for parcel_id, description in self.app.request_parcels(request_id)
+        }
 
         def save(worker_id: str, values: dict[str, str]) -> None:
             collected = values["parcels"] == "All parcels collected and checked"
@@ -717,7 +727,8 @@ class MainWindow:
             ):
                 raise ValueError("Pickup was not recorded. You can correct the form or choose Cancel.")
             outcome = self.app.pickup(
-                request_id, worker_id, values["amount"], parcel_ok=collected
+                request_id, worker_id, values["amount"], parcel_ok=collected,
+                failure=failures.get(values["parcels"]), parcel_id=parcels.get(values["parcel"]),
             )
             self.status.set(f"Pickup outcome for {request_id}: {outcome}")
 
@@ -736,13 +747,11 @@ class MainWindow:
 
         FormDialog(
             self.root, "Record pickup and simulated payment",
-            [("staff", "Reporting worker", ""), ("parcels", "Parcel outcome", ""),
-             ("amount", "Amount received ($)", _display(amount_default))],
+            [("staff", "Reporting Worker", ""), ("parcels", "Parcel Outcome", ""), ("parcel", "Affected Parcel", ""), ("amount", "Amount Received ($)", _display(amount_default))],
             submit,
-            explanation="Payment is recorded locally; no bank transaction occurs. A payment mismatch "
-                        "requires a separate office authorisation before pickup can complete.",
-            choices={"staff": list(choices), "parcels": ["All parcels collected and checked", "Pickup failed / parcels not collected"]},
-            button_text="Record pickup",
+            explanation="Payment is recorded locally; no bank transaction occurs. A payment mismatch requires a separate office authorisation before pickup can complete.",
+            choices={"staff": list(choices), "parcels": ["All parcels collected and checked", *failures], "parcel": list(parcels)},
+            button_text="Record Pickup",
         )
 
     def _authorise(self) -> None:
@@ -754,8 +763,7 @@ class MainWindow:
             self.app.authorise_payment(request_id, values["authorised_by"], values["reason"])
             self.refresh()
             self.status.set(
-                "Authorisation recorded. The allocated worker must confirm pickup again "
-                "using the recorded received amount."
+                "Authorisation recorded. The allocated worker must confirm pickup again using the recorded received amount."
             )
 
         FormDialog(
@@ -800,8 +808,7 @@ class MainWindow:
             return
         if messagebox.askyesno(
             "Office action: allow pickup retry",
-            "Return this failed-pickup request to Accepted for a new allocation? "
-            "The previous assignment remains in its history.", parent=self.root,
+            "Return this failed-pickup request to Accepted for a new allocation? The previous assignment remains in its history.", parent=self.root,
         ):
             self._action(lambda: self.app.retry_pickup(request_id), "Pickup retry authorised; request awaits allocation.")
 

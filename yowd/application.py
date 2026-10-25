@@ -284,17 +284,23 @@ class YowdApplication:
 
         self._change(assign)
 
+    def request_parcels(self, request_id: str) -> list[tuple[str, str]]:
+        # This is Used to Return a List with Their ID and Name
+        return [(p.parcel_id, p.description) for p in self._request(request_id).parcels]
+
     def pickup(
-        self, request_id: str, staff_id: str,
-        received_amount: str, parcel_ok: bool = True,
+        self, request_id: str, staff_id: str, received_amount: str, parcel_ok: bool = True, *, failure: str | None = None, parcel_id: str | None = None,
     ) -> str:
         def collect() -> str:
             request = self._request(request_id)
             if not isinstance(parcel_ok, bool):
                 raise DomainError("Parcel collection result must be true or false.")
+            
             if not parcel_ok:
-                request.record_pickup(staff_id, False, None, self._clock())
-                return "Failed pickup recorded. No payment was created; the assignment ended."
+                request.record_pickup(
+                    staff_id, False, None, self._clock(), failure=failure, parcel_id=parcel_id,
+                )
+                return f"{request.failure_reason} No payment was created; the assignment ended." # State Specific Fail Reason
             if request.quote is None:
                 raise DomainError("Pickup requires an accepted quote and allocation.")
             amount = _number(received_amount, "Received amount")
@@ -314,8 +320,7 @@ class YowdApplication:
             if completed:
                 return "Pickup recorded. Payment outcome saved; no bank transaction was performed."
             return (
-                "Payment exception recorded. The request remains Allocated. "
-                "Office staff must record authorisation before the assigned worker confirms pickup."
+                "Payment exception recorded. The request remains Allocated. Office staff must record authorisation before the assigned worker confirms pickup."
             )
 
         return self._change(collect)

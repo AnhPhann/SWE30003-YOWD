@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .common import (
-    DomainError, ParcelStatus, QuoteDecision, RequestStatus, local_datetime, require_text,
+    DomainError, ParcelStatus, PickupFailure, QuoteDecision, RequestStatus, local_datetime, require_text,
 )
 from .customer import Customer
 from .delivery_assignment import DeliveryAssignment
@@ -189,8 +189,27 @@ class DeliveryRequest:
         self.status = RequestStatus.ALLOCATED
         self.failure_reason = ""
 
+    def _pickup_failure_reason(self, failure: str | None, parcel_id: str | None) -> str:
+        # Check Failure Reason and Return Specific Fail Text
+
+        if failure is None: # Standard Fail Message with No Specific Reason
+            return "Required parcels were not all collected in acceptable condition."
+        try:
+            failure = PickupFailure(failure)
+        except ValueError:
+            raise DomainError("Unknown Pickup Failure") from None
+        
+        if failure == PickupFailure.CUSTOMER_NOT_PRESENT:
+            return f"Failed Pickup: {failure.value}."
+        
+        parcel = next((p for p in self.parcels if p.parcel_id == parcel_id), None)  # Check for Each Parcel
+
+        if parcel is None: 
+            raise DomainError("Select the affected parcel from this request.") # If a Parcel Outcome is Set But No Parcel is Selected Raise the Following Error
+        return f"Failed Pickup: {failure.value} - {parcel.description} ({parcel.parcel_id})." # Marked Failed Pickup Stating Specific Parcel & Reason
+
     def record_pickup(
-        self, staff_id: str, parcel_ok: bool, payment: PaymentRecord | None, when: datetime
+        self, staff_id: str, parcel_ok: bool, payment: PaymentRecord | None, when: datetime, *, failure: str | None = None, parcel_id: str | None = None,
     ) -> bool:
         """Return False while an explicit payment exception authorisation is pending."""
         self._require_status(RequestStatus.ALLOCATED)
@@ -202,9 +221,10 @@ class DeliveryRequest:
         if not parcel_ok:
             if self.payment is not None:
                 raise DomainError("Resolve the recorded payment exception before reporting failed pickup.")
+            reason = self._pickup_failure_reason(failure, parcel_id) # State the Parcel That Failed
             assignment.end(when, RequestStatus.FAILED_PICKUP.value)
             self.status = RequestStatus.FAILED_PICKUP
-            self.failure_reason = "Required parcels were not all collected in acceptable condition."
+            self.failure_reason = reason # State Specific Failure Reason
             return False
         if not isinstance(payment, PaymentRecord):
             raise DomainError("A payment outcome record is required before pickup can succeed.")
