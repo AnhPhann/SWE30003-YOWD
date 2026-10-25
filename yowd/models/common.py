@@ -35,6 +35,12 @@ class QuoteDecision(str, Enum):
     ACCEPTED = "Accepted"
     DECLINED = "Declined"
 
+class PickupFailure(str, Enum):
+    # Current Failure Pickup Reasons
+    CUSTOMER_NOT_PRESENT = "Customer not present"
+    PARCEL_MISSING = "Parcel missing"
+    PARCEL_DAMAGED = "Parcel damaged"
+    PARCEL_MISMATCH = "Parcel does not match request"
 
 def require_text(value: str, label: str) -> str:
     """Return trimmed, nonempty text or a useful validation error."""
