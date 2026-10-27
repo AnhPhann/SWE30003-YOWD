@@ -31,6 +31,13 @@ class AvailabilitySchedule:
                 merged.append((period_start, period_end))
         self.periods = merged
 
+    def remove_period(self, start: datetime, end: datetime) -> None:
+        """Remove one exact period. Other periods and existing jobs stay untouched."""
+        target = validate_window(start, end)
+        if target not in self.periods:
+            raise DomainError("That availability period is not on this schedule.")
+        self.periods = [period for period in self.periods if period != target]
+
     def covers(self, start: datetime, end: datetime) -> bool:
         """Return whether the whole proposed window is covered."""
         validate_window(start, end, allow_zero=True)

@@ -12,7 +12,7 @@ from unittest.mock import patch
 from yowd.__main__ import DemoClock, run_demo
 from yowd.application import YowdApplication
 from yowd.models import DomainError, ParcelStatus, RequestStatus
-from yowd.serialization import encode_state
+from yowd.serialization import decode_state, encode_state
 from yowd.storage import SQLiteStore, StorageError
 
 
@@ -23,7 +23,8 @@ class ApplicationTests(unittest.TestCase):
         self.addCleanup(self.app.close)
         self.worker_id = self.app.register_staff(
             "Alex Tran", "alex@example.com", "0400111222",
-            self.clock.now, self.clock.now + timedelta(hours=10),
+            self.clock.now.replace(hour=8, minute=0, second=0, microsecond=0),
+            self.clock.now.replace(hour=18, minute=0, second=0, microsecond=0),
         )
 
     def parcel(self, **changes):
@@ -326,6 +327,58 @@ class ApplicationTests(unittest.TestCase):
                 self.clock.now, self.clock.now + timedelta(hours=1),
             )
         self.assertEqual(self.snapshot(), before)
+
+    def test_operating_hours_reject_new_periods_and_weekend_quotes(self):
+        before = self.snapshot()
+        sunday = datetime(2026, 10, 25, 9)
+        with self.assertRaisesRegex(DomainError, "weekday"):
+            self.app.set_availability(self.worker_id, [(sunday, sunday.replace(hour=12))])
+        with self.assertRaisesRegex(DomainError, "08:00 to 18:00"):
+            self.app.register_staff(
+                "Early Driver", "early@example.com", "0400111444",
+                self.clock.now.replace(hour=7), self.clock.now.replace(hour=12),
+            )
+        self.assertEqual(self.snapshot(), before)
+        request_id = self.request()
+        with self.assertRaisesRegex(DomainError, "weekday"):
+            self.app.prepare_quote(request_id, sunday, sunday.replace(hour=11))
+        self.assertIsNone(self.app.requests[request_id].quote)
+
+    def test_allocation_feedback_names_the_failing_check(self):
+        request_id = self.accepted()
+        other_id = self.app.register_staff(
+            "Sam Lee", "sam@example.com", "0400111333",
+            datetime(2026, 10, 26, 8), datetime(2026, 10, 26, 18),
+        )
+        report = self.app.allocation_options(request_id)
+        by_id = {row["id"]: row for row in report["options"]}
+        self.assertTrue(by_id[self.worker_id]["eligible"])
+        self.assertFalse(by_id[other_id]["eligible"])
+        self.assertIn("availability", by_id[other_id]["reason"])
+        self.app.deactivate_staff(self.worker_id)
+        refused = self.app.allocation_options(request_id)
+        inactive = next(row for row in refused["options"] if row["id"] == self.worker_id)
+        self.assertIn("inactive", inactive["reason"])
+        before = self.snapshot()
+        with self.assertRaisesRegex(DomainError, "inactive"):
+            self.app.allocate(request_id, self.worker_id)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.app.requests[request_id].status, RequestStatus.ACCEPTED)
+
+    def test_availability_edit_keeps_assignments_and_reloads(self):
+        request_id = self.allocated()
+        assignment_id = self.app.requests[request_id].assignments[0].assignment_id
+        tuesday = datetime(2026, 10, 27, 10)
+        self.app.set_availability(self.worker_id, [
+            (datetime(2026, 10, 26, 9), datetime(2026, 10, 26, 17)),
+            (tuesday, tuesday.replace(hour=16)),
+        ])
+        self.app.set_availability(self.worker_id, [(tuesday, tuesday.replace(hour=16))])
+        _customers, staff, requests = decode_state(self.snapshot())
+        restored = staff.get(self.worker_id)
+        self.assertEqual(restored.schedule.periods, [(tuesday, tuesday.replace(hour=16))])
+        self.assertEqual(requests[request_id].assignments[0].assignment_id, assignment_id)
+        self.assertEqual(restored.assignment_ids, [assignment_id])
 
     def test_storage_failure_rolls_back_all_objects_and_reverse_indexes(self):
         request_id = self.accepted()

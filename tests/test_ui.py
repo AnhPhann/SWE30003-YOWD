@@ -24,7 +24,7 @@ except ModuleNotFoundError as error:
     tk = None
     TK_IMPORT_ERROR = str(error)
 else:
-    from yowd.ui import FormDialog, MainWindow, NewRequestDialog
+    from yowd.ui import AvailabilityDialog, FormDialog, MainWindow, NewRequestDialog
 
 
 class DesktopIntegrationTests(unittest.TestCase):
@@ -47,6 +47,12 @@ class DesktopIntegrationTests(unittest.TestCase):
 
     def dialog(self, parent: tk.Misc | None = None) -> FormDialog:
         windows = [item for item in (parent or self.root).winfo_children() if isinstance(item, FormDialog)]
+        self.assertEqual(len(windows), 1)
+        windows[0].withdraw()
+        return windows[0]
+
+    def availability_dialog(self) -> AvailabilityDialog:
+        windows = [item for item in self.root.winfo_children() if isinstance(item, AvailabilityDialog)]
         self.assertEqual(len(windows), 1)
         windows[0].withdraw()
         return windows[0]
@@ -87,7 +93,7 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.window._respond(True)
         self.window._allocate()
         dialog = self.dialog()
-        worker_display = next(iter(self.window._worker_choices()))
+        worker_display = next(label for label in dialog.choices["staff"] if label.endswith("Eligible"))
         self.fill(dialog, staff=worker_display)
         self.invoke(dialog, "Allocate")
         self.assertEqual(self.app.overview()["requests"][0]["status"], "Allocated")
@@ -103,7 +109,7 @@ class DesktopIntegrationTests(unittest.TestCase):
         )
         if amount is not None:
             self.fill(dialog, amount=amount)
-        self.invoke(dialog, "Record pickup")
+        self.invoke(dialog, "Record Pickup")
 
     def test_empty_startup_does_not_create_sample_records(self) -> None:
         self.assertEqual(self.app.overview()["requests"], [])
@@ -220,14 +226,14 @@ class DesktopIntegrationTests(unittest.TestCase):
 
     def test_request_addresses_can_be_corrected_before_quote_and_cancelled(self) -> None:
         request_id, _staff_id = self.seed_and_select()
-        self.invoke(self.root, "Edit addresses")
+        self.invoke(self.root, "Edit Addresses")
         dialog = self.dialog()
         old_pickup = dialog.variables["pickup_address"].get()
         self.assertTrue(old_pickup)
         self.fill(dialog, pickup_address="Cancelled change")
         self.invoke(dialog, "Cancel")
         self.assertEqual(self.app.overview()["requests"][0]["pickup_address"], old_pickup)
-        self.invoke(self.root, "Edit addresses")
+        self.invoke(self.root, "Edit Addresses")
         dialog = self.dialog()
         self.fill(dialog, pickup_address="Richmond Library loading bay", destination_address="")
         self.invoke(dialog, "Save addresses")
@@ -247,7 +253,7 @@ class DesktopIntegrationTests(unittest.TestCase):
         dialog = self.dialog()
         self.invoke(dialog, "Prepare quote")
         before = dict(self.app.overview()["requests"][0])
-        self.invoke(self.root, "Edit addresses")
+        self.invoke(self.root, "Edit Addresses")
         dialog = self.dialog()
         self.fill(dialog, pickup_address="Unpermitted change")
         self.invoke(dialog, "Save addresses")
@@ -272,7 +278,7 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.window.app = restored
         self.window.refresh(request_id=request_id)
         self.assertIn("Not recorded", self.window.details.get("1.0", "end"))
-        self.invoke(self.root, "Edit addresses")
+        self.invoke(self.root, "Edit Addresses")
         dialog = self.dialog()
         self.assertEqual(dialog.variables["pickup_address"].get(), "")
         self.assertEqual(dialog.variables["destination_address"].get(), "")
@@ -343,7 +349,7 @@ class DesktopIntegrationTests(unittest.TestCase):
             dialog, staff=next(iter(self.window._worker_choices())),
             parcels="All parcels collected and checked",
         )
-        self.invoke(dialog, "Record pickup")
+        self.invoke(dialog, "Record Pickup")
         self.assertEqual(self.app.overview()["requests"][0]["status"], "Picked Up")
         self.show_error.assert_not_called()
 
@@ -355,7 +361,7 @@ class DesktopIntegrationTests(unittest.TestCase):
             dialog, staff=next(iter(self.window._worker_choices())),
             parcels="Pickup failed / parcels not collected",
         )
-        self.invoke(dialog, "Record pickup")
+        self.invoke(dialog, "Record Pickup")
         row = self.app.overview()["requests"][0]
         self.assertEqual(row["status"], "Failed pickup")
         self.assertEqual(row["payment"], "")
@@ -363,7 +369,7 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.assertEqual(self.app.overview()["requests"][0]["status"], "Accepted")
         self.window._allocate()
         dialog = self.dialog()
-        self.fill(dialog, staff=next(iter(self.window._worker_choices())))
+        self.fill(dialog, staff=next(label for label in dialog.choices["staff"] if label.endswith("Eligible")))
         self.invoke(dialog, "Allocate")
         self.pickup()
         self.window._delivery(False)
@@ -395,10 +401,37 @@ class DesktopIntegrationTests(unittest.TestCase):
         staff_id = self.app.overview()["staff"][0]["id"]
         self.window.staff_tree.selection_set(staff_id)
         self.window._availability()
-        dialog = self.dialog()
-        self.fill(dialog, start1="2026-10-24 09:00", end1="2026-10-24 17:00")
-        self.invoke(dialog, "Replace availability")
-        self.assertIn("2026-10-24 09:00", self.app.overview()["staff"][0]["availability"])
+        dialog = self.availability_dialog()
+        dialog.start_var.set("2026-10-26 09:00")
+        dialog.end_var.set("2026-10-26 17:00")
+        self.invoke(dialog, "Add period")
+        self.invoke(dialog, "Cancel")
+        self.assertIn("2026-10-23 08:00", self.app.overview()["staff"][0]["availability"])
+        self.assertNotIn("2026-10-26", self.app.overview()["staff"][0]["availability"])
+        self.window._availability()
+        dialog = self.availability_dialog()
+        dialog.start_var.set("2026-10-25 09:00")
+        dialog.end_var.set("2026-10-25 12:00")
+        self.invoke(dialog, "Add period")
+        self.assertIn("weekday", dialog.error.get())
+        dialog.start_var.set("2026-10-26 09:00")
+        dialog.end_var.set("2026-10-26 17:00")
+        self.invoke(dialog, "Add period")
+        monday = next(index for index, period in enumerate(dialog.draft) if period[0].day == 26)
+        dialog.periods.selection_set(monday)
+        self.invoke(dialog, "Remove selected")
+        self.invoke(dialog, "Save availability")
+        saved = self.app.overview()["staff"][0]["availability"]
+        self.assertIn("2026-10-23 08:00", saved)
+        self.assertNotIn("2026-10-26", saved)
+        self.window._availability()
+        dialog = self.availability_dialog()
+        dialog.periods.selection_set(0)
+        dialog.start_var.set("2026-10-23 10:00")
+        dialog.end_var.set("2026-10-23 16:00")
+        self.invoke(dialog, "Replace selected")
+        self.invoke(dialog, "Save availability")
+        self.assertIn("2026-10-23 10:00", self.app.overview()["staff"][0]["availability"])
         self.window._deactivate()
         self.assertFalse(self.app.overview()["staff"][0]["active"])
         self.assertEqual(len(self.window.staff_tree.get_children()), 1)

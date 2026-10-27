@@ -283,6 +283,10 @@ class DomainTests(unittest.TestCase):
         schedule.add_period(self.now + timedelta(hours=1), self.now + timedelta(hours=2))
         self.assertTrue(schedule.covers(self.now, self.now + timedelta(hours=2)))
         self.assertEqual(len(schedule.periods), 1)
+        schedule.remove_period(self.now, self.now + timedelta(hours=2))
+        self.assertEqual(schedule.periods, [])
+        with self.assertRaises(DomainError):
+            schedule.remove_period(self.now, self.now + timedelta(hours=2))
         with self.assertRaises(DomainError):
             schedule.add_period(self.now, self.now)
         self.roster.deactivate("S1")

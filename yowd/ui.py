@@ -6,10 +6,12 @@ persistence stay in that service, so changing a screen cannot bypass validation.
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any, Callable
+
+from .operating_hours import SUMMARY, next_operating_day
 
 
 DATE_FORMAT = "%Y-%m-%d %H:%M"
@@ -30,8 +32,9 @@ def _parse_date(value: str) -> date:
         raise ValueError("Enter the date as YYYY-MM-DD.") from error
 
 
-def _tomorrow(hour: int) -> str:
-    day = date.today() + timedelta(days=1)
+def _next_shift(hour: int) -> str:
+    """Default a new roster period to the next weekday, inside operating hours."""
+    day = next_operating_day(datetime.now())
     return datetime.combine(day, time(hour)).strftime(DATE_FORMAT)
 
 
@@ -57,6 +60,7 @@ class FormDialog(tk.Toplevel):
         self.title(title)
         self.transient(parent)
         self.resizable(True, False)
+        self.choices = choices or {}
         self.variables: dict[str, tk.StringVar] = {}
         self.columnconfigure(0, weight=1)
         body = ttk.Frame(self, padding=20)
@@ -119,6 +123,149 @@ class FormDialog(tk.Toplevel):
         self.grab_set()
         if first_widget is not None:
             first_widget.focus_set()
+
+
+class AvailabilityDialog(tk.Toplevel):
+    """Edit one worker's periods locally, then save or cancel the whole draft."""
+
+    def __init__(self, owner: "MainWindow", staff_id: str) -> None:
+        super().__init__(owner.root)
+        self.owner = owner
+        self.staff_id = staff_id
+        self.draft = list(owner.app.availability_periods(staff_id))
+        worker = owner.staff_rows.get(staff_id, {})
+        self.title(f"Availability for {worker.get('name', staff_id)}")
+        self.transient(owner.root)
+        self.resizable(True, True)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        body = ttk.Frame(self, padding=20)
+        body.grid(sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        ttk.Label(
+            body,
+            text=f"Operating hours: {SUMMARY}. Add, replace or remove periods in this draft. "
+                 "Cancel leaves the saved schedule unchanged. Saving does not change jobs already allocated.",
+            wraplength=560,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 12))
+        self.periods = tk.Listbox(body, height=6, exportselection=False)
+        self.periods.grid(row=1, column=0, sticky="ew")
+        self.periods.bind("<<ListboxSelect>>", self._prefill)
+        times = ttk.Frame(body)
+        times.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        times.columnconfigure(1, weight=1)
+        self.start_var = tk.StringVar(self)
+        self.end_var = tk.StringVar(self)
+        ttk.Label(times, text="From").grid(row=0, column=0, sticky="w", padx=(0, 12), pady=4)
+        ttk.Entry(times, textvariable=self.start_var, width=24).grid(row=0, column=1, sticky="ew", pady=4)
+        ttk.Label(times, text="Until").grid(row=1, column=0, sticky="w", padx=(0, 12), pady=4)
+        ttk.Entry(times, textvariable=self.end_var, width=24).grid(row=1, column=1, sticky="ew", pady=4)
+        draft_buttons = ttk.Frame(body)
+        draft_buttons.grid(row=3, column=0, sticky="w", pady=(12, 0))
+        for label, command in (
+            ("Add period", self._add),
+            ("Replace selected", self._replace),
+            ("Remove selected", self._remove),
+            ("Clear draft", self._clear),
+        ):
+            ttk.Button(draft_buttons, text=label, command=command).pack(side="left", padx=(0, 8))
+        self.error = tk.StringVar(self)
+        ttk.Label(body, textvariable=self.error, foreground="#a32121", wraplength=560).grid(
+            row=4, column=0, sticky="w", pady=(12, 0),
+        )
+        actions = ttk.Frame(body)
+        actions.grid(row=5, column=0, sticky="e", pady=(16, 0))
+        ttk.Button(actions, text="Cancel", command=self.destroy).pack(side="left", padx=(0, 8))
+        ttk.Button(actions, text="Save availability", command=self._save).pack(side="left")
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self._redraw()
+        self.update_idletasks()
+        self.minsize(620, self.winfo_reqheight())
+        self.grab_set()
+
+    def _redraw(self) -> None:
+        self.periods.delete(0, "end")
+        for start, end in self.draft:
+            self.periods.insert("end", f"{start.strftime(DATE_FORMAT)} to {end.strftime(DATE_FORMAT)}")
+
+    def _selected(self) -> int | None:
+        selection = self.periods.curselection()
+        if not selection:
+            return None
+        return int(selection[0])
+
+    def _prefill(self, _event: tk.Event | None = None) -> None:
+        index = self._selected()
+        if index is None:
+            return
+        start, end = self.draft[index]
+        self.start_var.set(start.strftime(DATE_FORMAT))
+        self.end_var.set(end.strftime(DATE_FORMAT))
+
+    def _typed_period(self) -> tuple[datetime, datetime]:
+        return _parse_datetime(self.start_var.get()), _parse_datetime(self.end_var.get())
+
+    def _apply(self, periods: list[tuple[datetime, datetime]]) -> None:
+        try:
+            self.draft = self.owner.app.merged_availability(periods)
+        except EXPECTED_ERRORS as error:
+            self.error.set(str(error))
+            return
+        self.error.set("")
+        self._redraw()
+
+    def _add(self) -> None:
+        try:
+            start, end = self._typed_period()
+        except EXPECTED_ERRORS as error:
+            self.error.set(str(error))
+            return
+        self._apply([*self.draft, (start, end)])
+
+    def _replace(self) -> None:
+        index = self._selected()
+        if index is None:
+            self.error.set("Select the period to replace.")
+            return
+        try:
+            start, end = self._typed_period()
+        except EXPECTED_ERRORS as error:
+            self.error.set(str(error))
+            return
+        retained = [period for position, period in enumerate(self.draft) if position != index]
+        self._apply([*retained, (start, end)])
+
+    def _remove(self) -> None:
+        index = self._selected()
+        if index is None:
+            self.error.set("Select the period to remove.")
+            return
+        self.draft = [period for position, period in enumerate(self.draft) if position != index]
+        self.error.set("Period removed from the draft. Save to keep this change, or Cancel to restore the saved schedule.")
+        self._redraw()
+
+    def _clear(self) -> None:
+        self.draft = []
+        self.error.set("Draft cleared. Save to record no available hours, or Cancel to keep the saved schedule.")
+        self._redraw()
+
+    def _save(self) -> None:
+        if not self.draft and not messagebox.askyesno(
+            "Clear availability",
+            "Save this worker with no available hours? Jobs already allocated stay assigned.",
+            parent=self,
+        ):
+            self.error.set("Empty schedule was not saved.")
+            return
+        try:
+            self.owner.app.set_availability(self.staff_id, self.draft)
+        except EXPECTED_ERRORS as error:
+            self.error.set(str(error))
+            return
+        self.owner.refresh()
+        self.owner.status.set(f"Availability saved for {self.staff_id}.")
+        self.destroy()
 
 
 class NewRequestDialog(tk.Toplevel):
@@ -453,7 +600,7 @@ class MainWindow:
             ttk.Button(toolbar, text=label, command=callback).pack(side="left", padx=(0, 8))
         ttk.Label(
             tab,
-            text="Former workers remain visible so delivery history is retained. "
+            text=f"Operating hours: {SUMMARY}. Former workers remain visible so delivery history is retained. "
                  "Availability periods use YYYY-MM-DD HH:MM.",
             wraplength=1050, style="Muted.TLabel",
         ).grid(row=1, column=0, sticky="w", pady=(0, 12))
@@ -688,15 +835,37 @@ class MainWindow:
         request_id = self._selected_request()
         if request_id is None:
             return
+        try:
+            report = self.app.allocation_options(request_id)
+        except EXPECTED_ERRORS as error:
+            messagebox.showerror("Action could not be completed", str(error), parent=self.root)
+            return
+        if not report["options"]:
+            messagebox.showinfo("No staff registered", "Register a staff member first.", parent=self.root)
+            return
+        labels = {
+            f"{option['name']} | {option['id']} — "
+            f"{'Eligible' if option['eligible'] else option['reason']}": option["id"]
+            for option in report["options"]
+        }
 
-        def save(worker_id: str, _values: dict[str, str]) -> None:
-            self.app.allocate(request_id, worker_id)
+        def save(values: dict[str, str]) -> None:
+            if values["staff"] not in labels:
+                raise ValueError("Choose a worker.")
+            self.app.allocate(request_id, labels[values["staff"]])
+            self.refresh()
             self.status.set(f"Worker allocated to {request_id}.")
 
-        self._worker_form(
-            "Allocate Delivery Worker",
-            "The application checks request status, active assignments, employment and the quoted window.",
-            save, button_text="Allocate",
+        FormDialog(
+            self.root, "Allocate delivery worker",
+            [("staff", "Worker", "")], save,
+            explanation=(
+                f"Operating hours: {report['operating_hours']}. {report['window_text']} "
+                "A quote does not reserve a worker, and another job in the same window does not "
+                "block allocation. Eligible workers can take this request. Any other row explains the refusal."
+            ),
+            choices={"staff": list(labels)},
+            button_text="Allocate",
         )
 
     def _pickup(self) -> None:
@@ -824,8 +993,9 @@ class MainWindow:
         FormDialog(
             self.root, "Register delivery staff",
             [("name", "Name", ""), ("email", "Email", ""), ("phone", "Phone", ""),
-             ("start", "Available from", _tomorrow(8)), ("end", "Available until", _tomorrow(18))],
-            save, explanation="Register a worker with an initial availability period. Dates: YYYY-MM-DD HH:MM.",
+             ("start", "Available from", _next_shift(8)), ("end", "Available until", _next_shift(18))],
+            save,
+            explanation=f"Register a worker with one period inside {SUMMARY}. Dates: YYYY-MM-DD HH:MM.",
             button_text="Register staff",
         )
 
@@ -833,33 +1003,7 @@ class MainWindow:
         staff_id = self._selected_staff()
         if staff_id is None:
             return
-
-        def save(values: dict[str, str]) -> None:
-            periods = []
-            for index in range(1, 4):
-                start, end = values[f"start{index}"], values[f"end{index}"]
-                if not start and not end:
-                    continue
-                if not start or not end:
-                    raise ValueError(f"Enter both dates for availability period {index}.")
-                periods.append((_parse_datetime(start), _parse_datetime(end)))
-            self.app.set_availability(staff_id, periods)
-            self.refresh()
-            self.status.set(f"Availability replaced for {staff_id}.")
-
-        fields = []
-        for index in range(1, 4):
-            fields.extend([
-                (f"start{index}", f"Period {index}: from", ""),
-                (f"end{index}", f"Period {index}: until", ""),
-            ])
-        FormDialog(
-            self.root, "Replace staff availability", fields, save,
-            explanation="This replaces the selected worker's availability with up to three periods. "
-                        "Leave unused pairs blank. Leave all pairs blank to record no available hours. "
-                        "Enter YYYY-MM-DD HH:MM.",
-            button_text="Replace availability",
-        )
+        AvailabilityDialog(self, staff_id)
 
     def _deactivate(self) -> None:
         staff_id = self._selected_staff()
