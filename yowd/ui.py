@@ -375,24 +375,38 @@ class MainWindow:
         tab.rowconfigure(2, weight=1)
         toolbar = ttk.Frame(tab)
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        actions = (
-            ("New Request", lambda: NewRequestDialog(self)),
-            ("Edit Addresses", self._edit_addresses),
-            ("Prepare Quote", self._quote),
-            ("Accept Quote", lambda: self._respond(True)),
-            ("Decline Quote", lambda: self._respond(False)),
-            ("Allocate Worker", self._allocate),
-            ("Record Pickup", self._pickup),
-            ("Authorise Payment Exception", self._authorise),
-            ("Delivered", lambda: self._delivery(True)),
-            ("Failed Delivery", lambda: self._delivery(False)),
-            ("Retry Pickup", self._retry_pickup),
+        # Group Buttons Based on End User Type
+        groups = (
+            ("Customer", (
+                ("New Request", lambda: NewRequestDialog(self)),
+                ("Edit Addresses", self._edit_addresses),
+                ("Accept Quote", lambda: self._respond(True)),
+                ("Decline Quote", lambda: self._respond(False)),
+            )),
+            ("Office Staff", (
+                ("Prepare Quote", self._quote),
+                ("Allocate Worker", self._allocate),
+                ("Manage Payment Exception", self._manage_payment_exception),
+                ("Retry Pickup", self._retry_pickup),
+            )),
+            ("Delivery Staff", (
+                ("Record Pickup", self._pickup),
+                ("Delivered", lambda: self._delivery(True)),
+                ("Failed Delivery", lambda: self._delivery(False)),
+            )),
         )
-        for index, (label, callback) in enumerate(actions):
-            ttk.Button(toolbar, text=label, command=callback).grid(
-                row=index // 5, column=index % 5, sticky="ew", padx=(0, 6), pady=(0, 6)
+        for row, (role, actions) in enumerate(groups):
+
+            # Role Name in the First Column, Its Buttons Beside It
+            ttk.Label(toolbar, text=role, style="Section.TLabel").grid(
+                row=row, column=0, sticky="w", padx=(0, 12), pady=(0, 6)
             )
-        for column in range(5):
+            for column, (label, callback) in enumerate(actions, start=1):
+                ttk.Button(toolbar, text=label, command=callback).grid(
+                    row=row, column=column, sticky="ew", padx=(0, 6), pady=(0, 6)
+                )
+        # Button Columns Share Spare Width
+        for column in range(1, 5):
             toolbar.columnconfigure(column, weight=1)
         ttk.Label(
             tab, text="Select a request to view its complete record or perform an action.",
@@ -756,25 +770,60 @@ class MainWindow:
             button_text="Record Pickup",
         )
 
-    def _authorise(self) -> None:
+    # Manage Payment Exception, Office Staff Action
+    def _manage_payment_exception(self) -> None:
         request_id = self._selected_request()
         if request_id is None:
             return
+        row = self.request_rows.get(request_id, {})
+
+        # Only Open the Form When a Payment Exception is Waiting for a Decision
+        if not row.get("payment_exception") or row.get("payment_authorised"):
+            messagebox.showinfo(
+                "No Decision Needed",
+                "This request has no payment exception waiting for an office decision.",
+                parent=self.root,
+            )
+            return
+        # Dropdown Options, Mapped to Whether the Exception is Approved
+        decisions = {
+            "Approve - Accept the Amount Received": True,
+            "Reject - Record a Failed Pickup": False,
+        }
 
         def save(values: dict[str, str]) -> None:
-            self.app.authorise_payment(request_id, values["authorised_by"], values["reason"])
+            if values["decision"] not in decisions:
+                raise ValueError("Choose whether to approve or reject the payment exception.")
+            if decisions[values["decision"]]:
+                self.app.authorise_payment(request_id, values["decided_by"], values["reason"])
+                message = (
+                    "Payment exception approved. The allocated worker must confirm pickup again using the recorded received amount."
+                )
+            else:
+                # Confirm First, as Rejecting Ends the Worker's Assignment
+                if not messagebox.askyesno(
+                    "Confirm Rejection",
+                    "Reject this payment exception? The pickup will be recorded as failed, the parcels stay with the customer and the assignment will end. Office staff can retry later.",
+                    parent=self.root,
+                ):
+                    raise ValueError("Decision was not recorded. You can correct the form or choose Cancel.")
+                self.app.decline_payment(request_id, values["decided_by"], values["reason"])
+
+                # On Payment Rejected
+                message = (
+                    f"Payment exception rejected for {request_id}. Pickup failed; use Retry Pickup once the customer can pay the quoted amount."
+                )
             self.refresh()
-            self.status.set(
-                "Authorisation recorded. The allocated worker must confirm pickup again using the recorded received amount."
-            )
+            self.status.set(message)
 
         FormDialog(
-            self.root, "Office action: authorise payment exception",
-            [("authorised_by", "Authorised by", ""), ("reason", "Business reason", "")],
-            save,
-            explanation="Use this distinct office action only after a payment exception has been recorded. "
-                        "Enter the person authorising the exception and their reason.",
-            button_text="Record Authorisation",
+            self.root, "Office Action: Manage Payment Exception",
+            [("decision", "Decision", ""), ("decided_by", "Decided By", ""), ("reason", "Business Reason", "")], save,
+            
+            # Show Both Amounts so Office Staff Can See the Difference Before Deciding
+            explanation=f"Quoted ${row.get('quote_amount', '')}, received ${row.get('received_amount', '')}. Approve to accept the amount received, or reject it to record a failed pickup that can be retried. Enter who made the decision and why.",
+            choices={"decision": list(decisions)}, # List Reject or Accept Choices
+            button_text="Record Decision", # Decision Button Once Inputs are Filled
         )
 
     def _delivery(self, successful: bool) -> None:
