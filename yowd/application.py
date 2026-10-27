@@ -21,8 +21,18 @@ from .models import (
     DomainError,
     Parcel,
     PaymentRecord,
+    QuoteDecision,
     RequestStatus,
     StaffList,
+)
+from .operating_hours import (
+    CLOSE,
+    OPEN,
+    SUMMARY,
+    ensure_availability_period,
+    ensure_quoted_window,
+    next_operating_day,
+    within_operating_hours,
 )
 from .pricing import SERVICE_ZONES, TariffPolicy, normalise_suburb
 from .models.common import require_text
@@ -183,6 +193,7 @@ class YowdApplication:
         available_from: datetime, available_until: datetime,
     ) -> str:
         def register() -> str:
+            ensure_availability_period(available_from, available_until)
             worker = DeliveryStaff(_identifier("STA"), name, email, phone)
             if any(
                 existing.email.casefold() == worker.email.casefold()
@@ -195,14 +206,36 @@ class YowdApplication:
 
         return self._change(register)
 
+    def operating_hours_summary(self) -> str:
+        return SUMMARY
+
+    def availability_periods(self, staff_id: str) -> list[tuple[datetime, datetime]]:
+        """Return the saved periods. Callers may edit a copy without changing them."""
+        return list(self.staff_list.get(staff_id).schedule.periods)
+
+    def merged_availability(
+        self, periods: list[tuple[datetime, datetime]],
+    ) -> list[tuple[datetime, datetime]]:
+        """Validate and merge a draft schedule without saving it."""
+        if not isinstance(periods, list):
+            raise DomainError("Availability must be a list of periods.")
+        schedule = AvailabilitySchedule()
+        for period in periods:
+            if not isinstance(period, (tuple, list)) or len(period) != 2:
+                raise DomainError("Each availability period needs a start and end.")
+            start, end = period
+            ensure_availability_period(start, end)
+            schedule.add_period(start, end)
+        return list(schedule.periods)
+
     def set_availability(
         self, staff_id: str, periods: list[tuple[datetime, datetime]],
     ) -> None:
+        """Replace the saved schedule. An empty list clears it and keeps past jobs."""
         def update() -> None:
-            schedule = AvailabilitySchedule()
-            for start, end in periods:
-                schedule.add_period(start, end)
-            self.staff_list.get(staff_id).schedule = schedule
+            self.staff_list.get(staff_id).schedule = AvailabilitySchedule(
+                self.merged_availability(list(periods)),
+            )
 
         self._change(update)
 
@@ -232,11 +265,12 @@ class YowdApplication:
             for start, end in worker.schedule.periods:
                 pickup_at = max(start, ready)
                 delivery_at = pickup_at + duration
-                if delivery_at <= end:
+                if delivery_at <= end and within_operating_hours(pickup_at, delivery_at):
                     windows.append((pickup_at, delivery_at))
         if not windows:
             raise DomainError(
-                "No active worker's availability covers a suggested delivery window. "
+                "No active worker's availability covers a suggested delivery window "
+                f"inside operating hours ({SUMMARY}). "
                 "Register a worker or update availability first."
             )
         return min(windows)
@@ -259,6 +293,7 @@ class YowdApplication:
                 raise DomainError("Both estimated pickup and delivery times are required.")
             else:
                 pickup, delivery = pickup_at, delivery_at
+            ensure_quoted_window(pickup, delivery)
             amount = self.tariff.estimate(request)
             quote = DeliveryQuote(
                 _identifier("QUO"), request_id, amount, pickup, delivery, self._clock(),
@@ -280,10 +315,59 @@ class YowdApplication:
 
         self._change(respond)
 
+    def _allocation_refusal(self, request: DeliveryRequest, worker: DeliveryStaff) -> str | None:
+        """Return why this worker cannot take this request, using the same order as allocation."""
+        if request.status != RequestStatus.ACCEPTED:
+            return (
+                f"This action requires status {RequestStatus.ACCEPTED.value}; "
+                f"current status is {request.status.value}."
+            )
+        if request.active_assignment is not None:
+            return "This request already has an active assignment."
+        if request.quote is None or request.quote.decision != QuoteDecision.ACCEPTED:
+            return "Allocation requires an accepted quote."
+        try:
+            ensure_quoted_window(request.quote.pickup_at, request.quote.delivery_at)
+        except DomainError as error:
+            return str(error)
+        eligible, reason = worker.eligibility(request.quote.pickup_at, request.quote.delivery_at)
+        if not eligible:
+            return reason
+        return None
+
+    def allocation_options(self, request_id: str) -> dict:
+        """Explain every worker's eligibility for the accepted quoted window."""
+        request = self._request(request_id)
+        if request.quote is None:
+            window_text = "This request has no quote yet."
+        else:
+            window_text = (
+                f"Quoted window: {request.quote.pickup_at:%Y-%m-%d %H:%M} to "
+                f"{request.quote.delivery_at:%Y-%m-%d %H:%M}."
+            )
+        options = []
+        for worker in self.staff_list.staff.values():
+            reason = self._allocation_refusal(request, worker)
+            options.append({
+                "id": worker.staff_id,
+                "name": worker.name,
+                "active": worker.active,
+                "eligible": reason is None,
+                "reason": reason or "Worker is active and their schedule covers the quoted window.",
+            })
+        return {
+            "operating_hours": SUMMARY,
+            "window_text": window_text,
+            "options": options,
+        }
+
     def allocate(self, request_id: str, staff_id: str) -> None:
         def assign() -> None:
             request = self._request(request_id)
             worker = self.staff_list.get(staff_id)
+            reason = self._allocation_refusal(request, worker)
+            if reason:
+                raise DomainError(reason)
             request.allocate(worker, _identifier("ASN"), self._clock())
 
         self._change(assign)
@@ -463,9 +547,10 @@ class YowdApplication:
 
         def seed() -> None:
             now = self._clock()
-            start = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+            day = next_operating_day(now)
+            start = datetime.combine(day, OPEN)
             worker = DeliveryStaff(_identifier("STA"), "Sample Driver", "driver@example.com", "0400000001")
-            worker.schedule.add_period(start, start.replace(hour=18))
+            worker.schedule.add_period(start, datetime.combine(day, CLOSE))
             self.staff_list.register(worker)
             customer = Customer(_identifier("CUS"), "Sample Customer", "customer@example.com", "0400000002")
             parcels = [

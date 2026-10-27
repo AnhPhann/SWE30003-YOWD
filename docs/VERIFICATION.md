@@ -1,6 +1,7 @@
 # Local development checks
 
-Checked on 22 October 2026 using Windows, Python 3.12.14, Tk 8.6 and SQLite 3.53.1.
+Checked on 22 October 2026 using Windows, Python 3.12.14, Tk 8.6 and SQLite 3.53.1,
+and re-run on 25 October 2026 after the weekday operating-hours and availability-editing work.
 These results include the address and parcel-input refinement and describe
 the current local development version.
 
@@ -10,7 +11,7 @@ the current local development version.
 python -m unittest discover -s tests -v
 ```
 
-Result: **114 tests passed, none skipped**.
+Result: **117 tests passed, none skipped**.
 
 - 21 domain-rule tests.
 - 29 application and persistence-integration tests.

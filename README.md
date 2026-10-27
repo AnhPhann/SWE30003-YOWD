@@ -64,7 +64,8 @@ These are implementation assumptions for team review, not a real YOWD tariff or 
 - The configured sample service area is Melbourne, Docklands, Southbank, Carlton, Brunswick, Richmond, Hawthorn, Footscray, St Kilda and South Yarra. New requests require complete delivery-address text separately from these suburb keys; pricing and coverage still use suburbs.
 - Legacy records with no street addresses keep both address fields blank. The request details show that the information was not recorded. A legacy Requested delivery must be corrected through **Edit addresses** before it can be quoted; historical records are not assigned invented addresses.
 - The sample quote is AUD 10 base fee, plus AUD 2 per parcel, plus AUD 2 per total billable kilogram, plus a route charge of AUD 2 within one zone or AUD 5 across zones. Each parcel's billable weight is the greater of actual kilograms and `length_cm * width_cm * height_cm / 5000`. The total is rounded to cents.
-- Window estimation considers request age and active workers' availability. The scheduling policy uses a 15-minute lead time and 15-minute priority-rank increments. The estimated delivery duration is 60 minutes within a zone and 90 minutes across zones. A quote does not reserve a worker.
+- Operating hours are Monday to Friday, 08:00 to 18:00 Melbourne local time. New availability periods and quoted windows must each fall inside one such day. Public holidays are not excluded. A saved schedule from before this rule is still loaded; the next edit is checked. This is a team assumption and can be changed in one place, `yowd/operating_hours.py`.
+- Window estimation considers request age, operating hours and active workers' availability. The scheduling policy uses a 15-minute lead time and 15-minute priority-rank increments. The estimated delivery duration is 60 minutes within a zone and 90 minutes across zones. A quote does not reserve a worker. Another job in the same window does not, by itself, make a worker unavailable.
 - All datetimes are naive local Melbourne times. Enter desktop date/time values as `YYYY-MM-DD HH:MM` and statistics dates as `YYYY-MM-DD`.
 - Pickup and handover operate on all required parcels together. Partial collection and partial delivery need a separate agreed design.
 - Payments are simulated outcome records. Office authorisation records an entered name and reason; the starter does not authenticate that person.
@@ -81,6 +82,7 @@ run.py                       Terminal entry point
 start-yowd.bat               Windows launcher
 yowd/__main__.py             Command-line options and startup
 yowd/application.py          Application facade for screens and demonstrations
+yowd/operating_hours.py       Weekday operating calendar used by availability and quotes
 yowd/pricing.py              Sample service zones, tariff and duration policy
 yowd/serialization.py        Convert the shared object graph to/from snapshots
 yowd/storage.py              Atomic SQLite snapshot storage and revision checks

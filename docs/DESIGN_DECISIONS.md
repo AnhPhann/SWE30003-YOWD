@@ -116,6 +116,16 @@ Draft parcel rows use the same validation before being added or replaced. **Edit
 
 Tests exercise both successful paths and rejected actions, including history retention and authorisation. Hidden-window desktop tests check callbacks and widget state; visual layout and usability need separate inspection.
 
+## 11. Weekday operating hours and editable availability
+
+**Proposal for team review.** A small Melbourne same-day courier normally dispatches on weekdays inside a fixed day shift. The working rule is Monday to Friday, 08:00 to 18:00, naive Melbourne local time. Saturday, Sunday, overnight periods and public-holiday calendars are out of this rule. Public holidays are a known gap: a real operation would add a holiday calendar later without changing the staff classes.
+
+`AvailabilitySchedule` still only stores periods and answers whether a window is covered. It does not know the company calendar. `operating_hours.py` is the single policy. Registration, availability edits and quotation all call it. Allocation asks for the same quoted-window check, then asks the worker about employment and schedule coverage. Loading an older schedule does not delete periods that sit outside the new hours. The next edit must comply. No snapshot field was added, so schema 2 is unchanged.
+
+The availability screen edits a draft. Add, replace, remove and clear change only that draft. Cancel discards it. Save replaces the stored periods and leaves existing assignments in place. The allocation screen lists every worker as Eligible or gives the refusal: wrong request status, an active assignment already exists, the window is outside operating hours, the worker is inactive, or the schedule does not cover the window. Another assignment in the same window is still allowed, because that was the Assignment 2 simplification. A real courier would also limit vehicle capacity; that needs a separate team decision.
+
+Affected code: `operating_hours.py`, `availability_schedule.py`, `application.py`, `ui.py`, and the staff, quote and allocation tests.
+
 ## Updating this record
 
 For each agreed improvement, record:

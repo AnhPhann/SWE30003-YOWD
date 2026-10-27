@@ -27,6 +27,12 @@ New calls to `YowdApplication.create_request(...)` must supply `pickup_address=`
 - The older starter cannot read schema 2. Use a separate database when comparing versions.
 - Preserve shared Customer objects, assignment history, worker references and pending payment records when changing serialization.
 
+## Operating hours and availability
+
+`yowd/operating_hours.py` is the shared calendar. Quote estimation and allocation both use it. Change the hours there if the team picks a different shift. Do not copy the clock into `AvailabilitySchedule`.
+
+`merged_availability(periods)` checks and merges a draft without saving. `set_availability(staff_id, periods)` saves that result, including an empty list. `allocation_options(request_id)` returns each worker's eligibility and the refusal text the allocate action will raise. Existing assignment records are unchanged by an availability edit.
+
 ## Business invariants across features
 
 - A quote does not create an assignment or reserve a worker. Allocation rechecks employment status and full-window availability.
