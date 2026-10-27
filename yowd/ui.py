@@ -282,7 +282,7 @@ class NewRequestDialog(tk.Toplevel):
     def __init__(self, owner: "MainWindow") -> None:
         super().__init__(owner.root)
         self.owner = owner
-        self.title("New delivery request")
+        self.title("New Delivery Request")
         self.transient(owner.root)
         self.geometry("880x760")
         self.minsize(780, 700)
@@ -294,7 +294,7 @@ class NewRequestDialog(tk.Toplevel):
         body = ttk.Frame(self, padding=16)
         body.grid(sticky="nsew")
         body.columnconfigure(1, weight=1)
-        ttk.Label(body, text="Customer and delivery", style="Section.TLabel").grid(
+        ttk.Label(body, text="Customer and Delivery", style="Section.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 12)
         )
         fields = (
@@ -366,9 +366,7 @@ class NewRequestDialog(tk.Toplevel):
         )
         ttk.Label(
             body,
-            text="Sample service area: Melbourne, Richmond, Footscray, Hawthorn, Carlton, St Kilda, "
-                 "Brunswick, South Yarra, Docklands and Southbank. Enter the full delivery addresses "
-                 "separately from suburbs. Add each parcel before saving.",
+            text="Sample service area: Melbourne, Richmond, Footscray, Hawthorn, Carlton, St Kilda, Brunswick, South Yarra, Docklands and Southbank. Enter the full delivery addresses separately from suburbs. Add each parcel before saving.",
             wraplength=760,
         ).grid(row=parcel_row + 5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         buttons = ttk.Frame(body)
@@ -423,12 +421,11 @@ class NewRequestDialog(tk.Toplevel):
             self.error.set("")
 
         dialog = FormDialog(
-            self, "Edit parcel",
+            self, "Edit Parcel",
             [(key, label, original[key]) for key, label in self.PARCEL_FIELDS],
             save,
-            explanation="Changes apply to this unsaved parcel only after validation. "
-                        "Cancel keeps its original values.",
-            button_text="Save parcel",
+            explanation="Changes apply to this unsaved parcel only after validation. Cancel keeps its original values.",
+            button_text="Save Parcel",
         )
 
         def restore_modal(event: tk.Event) -> None:
@@ -494,7 +491,7 @@ class MainWindow:
             text="Local Prototype • Simulated Payment Records • Dates use Local Melbourne Time",
             style="Muted.TLabel",
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
-        ttk.Button(header, text="Load sample data", command=self._seed_demo).grid(
+        ttk.Button(header, text="Load Sample Data", command=self._seed_demo).grid(
             row=0, column=1, padx=(12, 8)
         )
         ttk.Button(header, text="Refresh", command=self.refresh).grid(row=0, column=2)
@@ -520,7 +517,7 @@ class MainWindow:
 
     def _build_requests(self) -> None:
         tab = ttk.Frame(self.notebook, padding=14)
-        self.notebook.add(tab, text="  Delivery requests  ")
+        self.notebook.add(tab, text="Delivery Requests")
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(2, weight=1)
         toolbar = ttk.Frame(tab)
@@ -587,13 +584,13 @@ class MainWindow:
 
     def _build_staff(self) -> None:
         tab = ttk.Frame(self.notebook, padding=14)
-        self.notebook.add(tab, text="  Staff and availability  ")
+        self.notebook.add(tab, text="Staff and Availability")
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(2, weight=1)
         toolbar = ttk.Frame(tab)
         toolbar.grid(row=0, column=0, sticky="w", pady=(0, 12))
         for label, callback in (
-            ("Register staff", self._register_staff),
+            ("Register Staff", self._register_staff),
             ("Set availability", self._availability),
             ("Deactivate selected staff", self._deactivate),
         ):
@@ -627,7 +624,7 @@ class MainWindow:
 
     def _build_statistics(self) -> None:
         tab = ttk.Frame(self.notebook, padding=18)
-        self.notebook.add(tab, text="  Delivery statistics  ")
+        self.notebook.add(tab, text="Delivery Statistics")
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(2, weight=1)
         ttk.Label(tab, text="Delivery outcomes by completion period", style="Section.TLabel").grid(
@@ -760,7 +757,6 @@ class MainWindow:
             self.root, title, [("staff", "Worker", "")] + (fields or []), save,
             explanation=explanation, choices={"staff": list(choices)}, button_text=button_text,
         )
-
     def _quote(self) -> None:
         request_id = self._selected_request()
         if request_id is None:
@@ -774,6 +770,13 @@ class MainWindow:
             pickup_default = ""
             delivery_default = ""
             suggestion = f"No suggested window: {error} "
+        # Show How the Sample Tariff Worked Out the Amount
+        try:
+            _, breakdown = self.app.quote_estimate(request_id)
+            tariff_note = f"Sample Tariff: {breakdown}. "
+        # If Tarif Could Not be Calculated
+        except EXPECTED_ERRORS as error:
+            tariff_note = f"No Tariff Estimate: {error} "
 
         def save(values: dict[str, str]) -> None:
             amount = self.app.prepare_quote(
@@ -786,10 +789,9 @@ class MainWindow:
             self.root, "Prepare delivery quote",
             [("pickup", "Estimated pickup", pickup_default), ("delivery", "Estimated delivery", delivery_default)],
             save,
-            explanation=suggestion + "Suggested times consider request age, duration and current availability; "
-                        "they do not reserve a worker. Times are editable. Enter YYYY-MM-DD HH:MM. "
-                        "The quoted amount is calculated by the application.",
-            button_text="Prepare quote",
+            explanation=suggestion + "Suggested times consider request age, duration and current availability; they do not reserve a worker. Times are editable. Enter YYYY-MM-DD HH:MM.\n\n"
+                        + tariff_note + "The quoted amount is calculated by the application.",
+            button_text="Prepare Quote",
         )
 
     def _edit_addresses(self) -> None:
@@ -941,7 +943,7 @@ class MainWindow:
             save,
             explanation="Use this distinct office action only after a payment exception has been recorded. "
                         "Enter the person authorising the exception and their reason.",
-            button_text="Record authorisation",
+            button_text="Record Authorisation",
         )
 
     def _delivery(self, successful: bool) -> None:
@@ -968,7 +970,7 @@ class MainWindow:
             "Record delivered parcels" if successful else "Record failed delivery",
             "The application checks that the reporting worker owns the active assignment and pickup is complete.",
             save, [] if successful else [("reason", "Failure reason", "")],
-            button_text="Record delivered" if successful else "Record failed delivery",
+            button_text="Record Delivered" if successful else "Record Failed Delivery",
         )
 
     def _retry_pickup(self) -> None:
@@ -1045,9 +1047,8 @@ class MainWindow:
 
     def _seed_demo(self) -> None:
         if messagebox.askyesno(
-            "Load sample data",
-            "Load clearly labelled sample customers, requests and staff into this local database? "
-            "This is allowed only when the database is empty.", parent=self.root,
+            "Load Sample Data",
+            "Load clearly labelled sample customers, requests and staff into this local database? This is allowed only when the database is empty.", parent=self.root,
         ):
             self._action(self.app.seed_demo, "Sample data loaded. These records are for demonstration.")
 

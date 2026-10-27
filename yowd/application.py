@@ -274,6 +274,10 @@ class YowdApplication:
                 "Register a worker or update availability first."
             )
         return min(windows)
+    
+    def quote_estimate(self, request_id: str) -> tuple[Decimal, str]:
+        request = self._request(request_id) # Get DeliveryRequest 
+        return self.tariff.estimate(request), self.tariff.explain(request) # Return Estimate Explanation
 
     def prepare_quote(
         self, request_id: str,
@@ -508,6 +512,11 @@ class YowdApplication:
                 f"  Pickup estimate: {quote.pickup_at:%Y-%m-%d %H:%M}",
                 f"  Delivery estimate: {quote.delivery_at:%Y-%m-%d %H:%M}",
             ])
+            # Tariff Breakdown Line
+            try:
+                lines.append(f"  Tariff Working: {self.tariff.explain(request)}")
+            except DomainError:
+                pass
         lines.extend(["", "Assignments (retained history):"])
         if not request.assignments:
             lines.append("  None")
