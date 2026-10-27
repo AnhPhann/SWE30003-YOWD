@@ -47,7 +47,21 @@ class TariffPolicy:
 
     def estimate(self, request: DeliveryRequest) -> Decimal:
         """Return AUD rounded once to cents, with no network/pricing dependency."""
-        request.validate()
+        same_zone, billable = self._route_and_weight(request)
+        route = self.same_zone_fee if same_zone else self.cross_zone_fee
+        try:
+            # Quote Calculation and Rounded
+            return (
+                self.base_fee + self.per_parcel * len(request.parcels) + self.per_kg * billable + route
+            ).quantize(Decimal("0.01"))
+        except DecimalException:
+            # Return Parcel to Large Error if Exceeds Decimal Limits
+            raise DomainError(
+                "Parcel measurements are too large to calculate a quote."
+            ) from None
+
+    def _route_and_weight(self, request: DeliveryRequest) -> tuple[bool, Decimal]:
+        request.validate() # Check Delivery Request is Valid
         try:
             same_zone = SERVICE_ZONES[request.pickup] == SERVICE_ZONES[request.destination]
         except KeyError as exc:
@@ -57,23 +71,34 @@ class TariffPolicy:
                 (
                     max(
                         parcel.weight_kg,
-                        parcel.length_cm * parcel.width_cm * parcel.height_cm
-                        / self.volumetric_divisor,
+                        parcel.length_cm * parcel.width_cm * parcel.height_cm / self.volumetric_divisor,
                     )
                     for parcel in request.parcels
                 ),
                 Decimal("0"),
             )
-            route = self.same_zone_fee if same_zone else self.cross_zone_fee
-            return (
-                self.base_fee + self.per_parcel * len(request.parcels)
-                + self.per_kg * billable + route
-            ).quantize(Decimal("0.01"))
         except DecimalException:
             raise DomainError(
                 "Parcel measurements are too large to calculate a quote."
             ) from None
+        return same_zone, billable
 
+    def explain(self, request: DeliveryRequest) -> str:
+        # Show how the Estimate was Reached, so Office Staff can Review
+        total = self.estimate(request)
+
+        same_zone, billable = self._route_and_weight(request) # Retrieve Quote
+        count = len(request.parcels) # Count Number of Parcels
+        
+        route = "Same-Zone Fee" if same_zone else "Cross-Zone Fee" # Retrieve Route Wording
+        route_fee = self.same_zone_fee if same_zone else self.cross_zone_fee
+        # Explain Text Breakdown
+        return (
+            f"${self.base_fee} Base + {count} Parcel{'s' if count != 1 else ''} x ${self.per_parcel}"
+            f" + {billable.quantize(Decimal('0.01'))} Billable KG x ${self.per_kg}"
+            f" + {route} ${route_fee} = ${total}"
+    )
+    
     def duration(self, request: DeliveryRequest) -> timedelta:
         """Sample estimate: one hour within a zone, ninety minutes across zones."""
         try:
