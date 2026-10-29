@@ -42,6 +42,16 @@ class PickupFailure(str, Enum):
     PARCEL_DAMAGED = "Parcel damaged"
     PARCEL_MISMATCH = "Parcel does not match request"
 
+
+class DeliveryFailure(str, Enum):
+    """Reasons a delivery attempt can fail (A1 Task 6, variants 3a-4a)."""
+
+    RECIPIENT_NOT_PRESENT = "Recipient not present"
+    DESTINATION_PROBLEM = "Destination inaccessible or incorrect"
+    PARCEL_MISSING = "Parcel missing"
+    PARCEL_DAMAGED = "Parcel damaged"
+    OTHER = "Other"
+
 def require_text(value: str, label: str) -> str:
     """Return trimmed, nonempty text or a useful validation error."""
     if not isinstance(value, str) or not value.strip():

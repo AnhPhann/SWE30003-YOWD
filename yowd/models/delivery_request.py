@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .common import (
-    DomainError, ParcelStatus, PickupFailure, QuoteDecision, RequestStatus, local_datetime, require_text,
+    DeliveryFailure, DomainError, ParcelStatus, PickupFailure, QuoteDecision,
+    RequestStatus, local_datetime, require_text,
 )
 from .customer import Customer
 from .delivery_assignment import DeliveryAssignment
@@ -244,7 +245,54 @@ class DeliveryRequest:
         # False Means a Payment Exception was Recorded and the Request is Flagged for Office Staff
         return not payment.exception
 
-    def record_delivery(self, staff_id: str, successful: bool, reason: str, when: datetime) -> None:
+    def delivery_failure_text(
+        self, failure: str | None, parcel_id: str | None, details: str,
+    ) -> str:
+        """Validate a failed delivery reason and return the text to record.
+
+        This method does not change the request. With no failure reason
+        selected, the free-text details are required and recorded as they
+        are. Missing and damaged parcel reasons require a parcel from this
+        request. The Other reason requires details.
+        """
+        if not isinstance(details, str):
+            raise DomainError("Failed delivery details must be text.")
+        details = details.strip()
+        if failure is None:
+            return require_text(details, "Failed delivery reason")
+        try:
+            failure = DeliveryFailure(failure)
+        except ValueError:
+            raise DomainError("Unknown failed delivery reason.") from None
+        if failure == DeliveryFailure.OTHER and not details:
+            raise DomainError(
+                "Describe the failed delivery reason in the details."
+            )
+
+        reason = f"Failed delivery: {failure.value}"
+        parcel_reasons = (
+            DeliveryFailure.PARCEL_MISSING, DeliveryFailure.PARCEL_DAMAGED,
+        )
+        if failure in parcel_reasons:
+            affected_parcel = None
+            for parcel in self.parcels:
+                if parcel.parcel_id == parcel_id:
+                    affected_parcel = parcel
+            if affected_parcel is None:
+                raise DomainError(
+                    "Select the affected parcel from this request."
+                )
+            description = affected_parcel.description
+            reason += f" - {description} ({affected_parcel.parcel_id})"
+        if details:
+            # A trailing full stop is removed so the text ends with one.
+            reason += f". Details: {details.rstrip('.')}"
+        return reason + "."
+
+    def record_delivery(
+        self, staff_id: str, successful: bool, reason: str, when: datetime,
+        *, failure: str | None = None, parcel_id: str | None = None,
+    ) -> None:
         self._require_status(RequestStatus.PICKED_UP)
 
         # Delivery Waits Until Office Staff Authorise a Payment Exception
@@ -259,7 +307,7 @@ class DeliveryRequest:
         if any(parcel.status != ParcelStatus.COLLECTED for parcel in self.parcels):
             raise DomainError("All required parcels must have been collected.")
         if not successful:
-            reason = require_text(reason, "Failed delivery reason")
+            reason = self.delivery_failure_text(failure, parcel_id, reason)
         status = RequestStatus.DELIVERED if successful else RequestStatus.FAILED_DELIVERY
         assignment.end(when, status.value)
         for parcel in self.parcels:

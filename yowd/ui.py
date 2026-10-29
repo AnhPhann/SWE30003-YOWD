@@ -1051,27 +1051,104 @@ class MainWindow:
         request_id = self._selected_request()
         if request_id is None:
             return
+        if successful:
+            self._record_successful_delivery(request_id)
+        else:
+            self._record_failed_delivery(request_id)
 
+    def _record_successful_delivery(self, request_id: str) -> None:
         def save(worker_id: str, values: dict[str, str]) -> None:
-            if not successful and not values["reason"]:
-                raise ValueError("Enter the reason delivery failed.")
-            if not messagebox.askyesno(
+            confirmed = messagebox.askyesno(
                 "Confirm final delivery outcome",
-                "Confirm all parcels have been handed over successfully?"
-                if successful else "Record failed delivery, end this assignment and retain the pickup payment?",
+                "Confirm all parcels have been handed over successfully?",
                 parent=self.root,
-            ):
-                raise ValueError("Delivery outcome was not recorded. Correct the form or choose Cancel.")
-            outcome = self.app.deliver(
-                request_id, worker_id, successful, values.get("reason", "")
             )
+            if not confirmed:
+                raise ValueError(
+                    "Delivery outcome was not recorded. "
+                    "Correct the form or choose Cancel."
+                )
+            outcome = self.app.deliver(request_id, worker_id, True)
             self.status.set(f"Delivery outcome for {request_id}: {outcome}")
 
         self._worker_form(
-            "Record delivered parcels" if successful else "Record failed delivery",
-            "The application checks that the reporting worker owns the active assignment and pickup is complete.",
-            save, [] if successful else [("reason", "Failure reason", "")],
-            button_text="Record Delivered" if successful else "Record Failed Delivery",
+            "Record delivered parcels",
+            "The application checks that the reporting worker owns the "
+            "active assignment and pickup is complete.",
+            save, [], button_text="Record Delivered",
+        )
+
+    def _record_failed_delivery(self, request_id: str) -> None:
+        worker_choices = self._worker_choices()
+        if not worker_choices:
+            messagebox.showinfo(
+                "No staff registered",
+                "Register and allocate a worker first.", parent=self.root,
+            )
+            return
+        failure_reasons = self.app.delivery_failure_reasons()
+        # Each parcel label maps to its parcel ID.
+        parcel_choices = {}
+        for parcel_id, description in self.app.request_parcels(request_id):
+            parcel_choices[f"{description} | {parcel_id}"] = parcel_id
+
+        def submit(values: dict[str, str]) -> None:
+            if values["staff"] not in worker_choices:
+                raise ValueError("Choose the worker reporting the delivery.")
+            # An empty selection means no reason was chosen from the list.
+            failure = None
+            if values["failure"]:
+                failure = values["failure"]
+            if failure is None and not values["reason"]:
+                raise ValueError(
+                    "Choose a failure reason or describe why delivery failed."
+                )
+            parcel_id = parcel_choices.get(values["parcel"])
+            # The reason is checked before asking for confirmation, so an
+            # invalid form shows its error without a confirmation prompt.
+            failure_text = self.app.check_failed_delivery(
+                request_id, values["reason"],
+                failure=failure, parcel_id=parcel_id,
+            )
+            confirmed = messagebox.askyesno(
+                "Confirm final delivery outcome",
+                f"Record this failed delivery?\n\n{failure_text}\n\n"
+                "The assignment will end and the pickup payment is kept.",
+                parent=self.root,
+            )
+            if not confirmed:
+                raise ValueError(
+                    "Delivery outcome was not recorded. "
+                    "Correct the form or choose Cancel."
+                )
+            outcome = self.app.deliver(
+                request_id, worker_choices[values["staff"]], False,
+                values["reason"], failure=failure, parcel_id=parcel_id,
+            )
+            self.status.set(f"Delivery outcome for {request_id}: {outcome}")
+            self.refresh()
+
+        FormDialog(
+            self.root, "Record failed delivery",
+            [
+                ("staff", "Reporting Worker", ""),
+                ("failure", "Failure Reason", ""),
+                ("parcel", "Affected Parcel", ""),
+                ("reason", "Details", ""),
+            ],
+            submit,
+            explanation=(
+                "Choose why the delivery failed. Parcel missing and Parcel "
+                "damaged need the affected parcel. Other needs details. "
+                "All parcels are flagged for return to the depot and the "
+                "pickup payment is kept."
+            ),
+            choices={
+                "staff": list(worker_choices),
+                "failure": failure_reasons,
+                "parcel": list(parcel_choices),
+            },
+            button_text="Record Failed Delivery",
         )
 
     def _retry_pickup(self) -> None:
