@@ -240,8 +240,13 @@ def _check_lifecycle(request: DeliveryRequest) -> None:
                 "pickup or completion timestamp is inconsistent with status")
     else:
         require(request.picked_up_at is not None, "a recorded pickup time is required")
-        require(payment is not None and payment.allows_pickup,
-                "pickup requires matching payment or recorded business authorisation")
+
+        # A Picked Up Request can Hold a Payment Exception as it is Awaiting Office Authorisation
+        require(payment is not None, "pickup requires a payment record")
+        if status != RequestStatus.PICKED_UP:
+            require(payment.allows_pickup,
+                    "delivery requires matching payment or recorded business authorisation")
+            
         require(request.picked_up_at >= assignments[-1].started_at,
                 "pickup predates its assignment")
     if status == RequestStatus.DELIVERED:

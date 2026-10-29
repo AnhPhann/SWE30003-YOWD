@@ -533,7 +533,7 @@ class MainWindow:
             ("Office Staff", (
                 ("Prepare Quote", self._quote),
                 ("Allocate Worker", self._allocate),
-                ("Manage Payment Exception", self._manage_payment_exception),
+                ("Authorise Payment Exception", self._authorise),
                 ("Retry Pickup", self._retry_pickup),
             )),
             ("Delivery Staff", (
@@ -939,60 +939,34 @@ class MainWindow:
             button_text="Record Pickup",
         )
 
-    # Manage Payment Exception, Office Staff Action
-    def _manage_payment_exception(self) -> None:
+    # Authorise Payment Exception, Office Staff Action
+    def _authorise(self) -> None:
         request_id = self._selected_request()
         if request_id is None:
             return
         row = self.request_rows.get(request_id, {})
-
-        # Only Open the Form When a Payment Exception is Waiting for a Decision
+        # Only Open the Form When a Payment Exception is Waiting for Authorisation
         if not row.get("payment_exception") or row.get("payment_authorised"):
             messagebox.showinfo(
-                "No Decision Needed",
-                "This request has no payment exception waiting for an office decision.",
+                "No Authorisation Needed",
+                "This request has no payment exception waiting for Office Staff authorisation.",
                 parent=self.root,
             )
             return
-        # Dropdown Options, Mapped to Whether the Exception is Approved
-        decisions = {
-            "Approve - Accept the Amount Received": True,
-            "Reject - Record a Failed Pickup": False,
-        }
 
         def save(values: dict[str, str]) -> None:
-            if values["decision"] not in decisions:
-                raise ValueError("Choose whether to approve or reject the payment exception.")
-            if decisions[values["decision"]]:
-                self.app.authorise_payment(request_id, values["decided_by"], values["reason"])
-                message = (
-                    "Payment exception approved. The allocated worker must confirm pickup again using the recorded received amount."
-                )
-            else:
-                # Confirm First, as Rejecting Ends the Worker's Assignment
-                if not messagebox.askyesno(
-                    "Confirm Rejection",
-                    "Reject this payment exception? The pickup will be recorded as failed, the parcels stay with the customer and the assignment will end. Office staff can retry later.",
-                    parent=self.root,
-                ):
-                    raise ValueError("Decision was not recorded. You can correct the form or choose Cancel.")
-                self.app.decline_payment(request_id, values["decided_by"], values["reason"])
-
-                # On Payment Rejected
-                message = (
-                    f"Payment exception rejected for {request_id}. Pickup failed; use Retry Pickup once the customer can pay the quoted amount."
-                )
+            self.app.authorise_payment(request_id, values["authorised_by"], values["reason"])
             self.refresh()
-            self.status.set(message)
+            self.status.set(f"Payment exception authorised for {request_id}. The request can now be delivered.")
 
         FormDialog(
-            self.root, "Office Action: Manage Payment Exception",
-            [("decision", "Decision", ""), ("decided_by", "Decided By", ""), ("reason", "Business Reason", "")], save,
-            
-            # Show Both Amounts so Office Staff Can See the Difference Before Deciding
-            explanation=f"Quoted ${row.get('quote_amount', '')}, received ${row.get('received_amount', '')}. Approve to accept the amount received, or reject it to record a failed pickup that can be retried. Enter who made the decision and why.",
-            choices={"decision": list(decisions)}, # List Reject or Accept Choices
-            button_text="Record Decision", # Decision Button Once Inputs are Filled
+            self.root, "Office Action: Authorise Payment Exception",
+            [("authorised_by", "Authorised By", ""), ("reason", "Business Reason", "")],
+            save,
+
+            # Show Both Amounts so Office Staff Can See the Difference Before Authorising
+            explanation=f"Quoted ${row.get('quote_amount', '')}, Received ${row.get('received_amount', '')}. The parcels have been picked up. Authorise the exception so delivery can continue.",
+            button_text="Record Authorisation",
         )
 
     def _delivery(self, successful: bool) -> None:
