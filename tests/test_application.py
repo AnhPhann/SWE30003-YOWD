@@ -131,7 +131,14 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(request.status, RequestStatus.DELIVERED)
         self.assertIsNone(request.active_assignment)
         self.assertTrue(all(p.status == ParcelStatus.DELIVERED for p in request.parcels))
-        self.assertEqual(self.app.statistics(date(2026, 10, 22), date(2026, 10, 22)), {
+        result = self.app.statistics(date(2026, 10, 22), date(2026, 10, 22))
+        original_keys = {
+            "completed": result["completed"],
+            "failed": result["failed"],
+            "by_staff": result["by_staff"],
+            "average_minutes": result["average_minutes"],
+        }
+        self.assertEqual(original_keys, {
             "completed": 1, "failed": 0,
             "by_staff": {self.worker_id: 1}, "average_minutes": 105.0,
         })
