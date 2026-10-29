@@ -35,7 +35,7 @@ from .operating_hours import (
     within_operating_hours,
 )
 from .pricing import SERVICE_ZONES, TariffPolicy, normalise_suburb
-from .models.common import require_text
+from .models.common import DeliveryFailure, require_text
 from .models.delivery_statistics import REPORTING_PERIODS
 from .serialization import decode_state, encode_state
 from .storage import SQLiteStore
@@ -420,16 +420,50 @@ class YowdApplication:
         self._change(approve)
 
     def deliver(
-        self, request_id: str, staff_id: str, successful: bool, reason: str = "",
+        self, request_id: str, staff_id: str, successful: bool,
+        reason: str = "", *, failure: str | None = None,
+        parcel_id: str | None = None,
     ) -> str:
+        """Record a delivery outcome reported by the allocated worker.
+
+        For a failed delivery, failure is one of delivery_failure_reasons()
+        and reason holds optional details. Without a failure value, reason
+        is required and recorded as the full failure text.
+        """
         def finish() -> str:
             request = self._request(request_id)
-            request.record_delivery(staff_id, successful, reason, self._clock())
+            request.record_delivery(
+                staff_id, successful, reason, self._clock(),
+                failure=failure, parcel_id=parcel_id,
+            )
             if successful:
                 return "Delivery completed and its assignment ended."
-            return "Failed delivery recorded. Payment retained; parcels flagged for return to depot."
+            return (
+                f"{request.failure_reason} Payment retained; "
+                "parcels flagged for return to depot."
+            )
 
         return self._change(finish)
+
+    def check_failed_delivery(
+        self, request_id: str, reason: str = "", *,
+        failure: str | None = None, parcel_id: str | None = None,
+    ) -> str:
+        """Validate a failed delivery report without saving anything.
+
+        Returns the failure text that deliver() would record. Raises
+        DomainError when the reason, parcel or details are invalid.
+        """
+        request = self._request(request_id)
+        return request.delivery_failure_text(failure, parcel_id, reason)
+
+    @staticmethod
+    def delivery_failure_reasons() -> list[str]:
+        """Return the failed delivery reasons offered to delivery staff."""
+        reasons = []
+        for failure in DeliveryFailure:
+            reasons.append(failure.value)
+        return reasons
 
     def retry_pickup(self, request_id: str) -> None:
         self._change(lambda: self._request(request_id).retry_pickup())
