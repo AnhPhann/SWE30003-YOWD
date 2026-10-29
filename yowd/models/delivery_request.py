@@ -211,7 +211,6 @@ class DeliveryRequest:
     def record_pickup(
         self, staff_id: str, parcel_ok: bool, payment: PaymentRecord | None, when: datetime, *, failure: str | None = None, parcel_id: str | None = None,
     ) -> bool:
-        """Return False while an explicit payment exception authorisation is pending."""
         self._require_status(RequestStatus.ALLOCATED)
         assignment = self._reporting_assignment(staff_id, when)
         if not isinstance(parcel_ok, bool):
@@ -219,8 +218,6 @@ class DeliveryRequest:
         if any(parcel.status != ParcelStatus.PENDING for parcel in self.parcels):
             raise DomainError("All required parcels must still be awaiting collection.")
         if not parcel_ok:
-            if self.payment is not None:
-                raise DomainError("Resolve the recorded payment exception before reporting failed pickup.")
             reason = self._pickup_failure_reason(failure, parcel_id) # State the Parcel That Failed
             assignment.end(when, RequestStatus.FAILED_PICKUP.value)
             self.status = RequestStatus.FAILED_PICKUP
@@ -234,26 +231,26 @@ class DeliveryRequest:
             raise DomainError("Payment must match this request and its accepted quoted amount.")
         if not assignment.started_at <= payment.received_at <= when:
             raise DomainError("Payment record time must fall between allocation and this pickup report.")
-        effective_payment = payment
         if self.payment is not None:
-            if (self.payment.payment_id, self.payment.request_id,
-                self.payment.quoted_amount, self.payment.received_amount) != (
-                payment.payment_id, payment.request_id,
-                payment.quoted_amount, payment.received_amount
-            ):
-                raise DomainError("The recorded payment cannot be replaced or have its amounts changed.")
-            effective_payment = self.payment
-        self.payment = effective_payment
-        if not effective_payment.allows_pickup:
-            return False
+            raise DomainError("A payment has already been recorded for this request.")
+        
+        # Record the Payment and Collect Parcels, Even if the Amount Does Not Match
+        self.payment = payment
         for parcel in self.parcels:
             parcel.status = ParcelStatus.COLLECTED
         self.picked_up_at, self.status = when, RequestStatus.PICKED_UP
         self.failure_reason = ""
-        return True
+        
+        # False Means a Payment Exception was Recorded and the Request is Flagged for Office Staff
+        return not payment.exception
 
     def record_delivery(self, staff_id: str, successful: bool, reason: str, when: datetime) -> None:
         self._require_status(RequestStatus.PICKED_UP)
+
+        # Delivery Waits Until Office Staff Authorise a Payment Exception
+        if self.payment is None or not self.payment.allows_pickup:
+            raise DomainError("The payment exception must be authorised by Office Staff before delivery.")
+
         assignment = self._reporting_assignment(staff_id, when)
         if not isinstance(successful, bool):
             raise DomainError("Delivery result must be true or false.")

@@ -392,32 +392,26 @@ class YowdApplication:
             if request.quote is None:
                 raise DomainError("Pickup requires an accepted quote and allocation.")
             amount = _number(received_amount, "Received amount")
-            if request.payment is not None:
-                payment = request.payment
-                if payment.received_amount != amount:
-                    raise DomainError(
-                        "A payment outcome is already recorded. Use the same received amount; "
-                        "record business authorisation separately if needed."
-                    )
-            else:
-                payment = PaymentRecord(
-                    _identifier("PAY"), request_id, request.quote.amount,
-                    amount, self._clock(),
-                )
-            completed = request.record_pickup(staff_id, True, payment, self._clock())
-            if completed:
-                return "Pickup recorded. Payment outcome saved; no bank transaction was performed."
-            return (
-                "Payment exception recorded. The request remains Allocated. Office staff must record authorisation before the assigned worker confirms pickup."
+            payment = PaymentRecord(
+                _identifier("PAY"), request_id, request.quote.amount,
+                amount, self._clock(),
             )
-
+            matched = request.record_pickup(staff_id, True, payment, self._clock())
+            if matched:
+                return "Pickup recorded. Payment outcome saved; no bank transaction was performed."
+            
+            # Amount Did Not Match it was Picked Up, but Flagged for Office Staff
+            return (
+                f"Pickup recorded with a payment exception (received AUD {payment.received_amount} of quoted AUD {payment.quoted_amount}). Flagged for Office Staff to authorise before delivery."
+            )
         return self._change(collect)
 
     def authorise_payment(self, request_id: str, authorised_by: str, reason: str) -> None:
         def approve() -> None:
             request = self._request(request_id)
-            if request.status != RequestStatus.ALLOCATED or request.payment is None:
-                raise DomainError("Only an allocated request with a pending payment exception can be authorised.")
+            if request.status != RequestStatus.PICKED_UP or request.payment is None:
+                raise DomainError("Only a picked-up request with a payment exception can be authorised.")
+            
             if not request.payment.exception:
                 raise DomainError("This payment matches the quote and needs no exception authorisation.")
             request.payment.authorise(authorised_by, reason)
