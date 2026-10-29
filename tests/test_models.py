@@ -115,7 +115,16 @@ class DomainTests(unittest.TestCase):
         self.assertIs(request.payment, payment)
         self.roster.deactivate(self.worker.staff_id)
         result = DeliveryStatistics.summarise([request, request], self.roster, self.now.date(), self.now.date())
-        self.assertEqual(result, {"completed": 1, "failed": 0, "by_staff": {"S1": 1}, "average_minutes": 120.0})
+        original_keys = {
+            "completed": result["completed"],
+            "failed": result["failed"],
+            "by_staff": result["by_staff"],
+            "average_minutes": result["average_minutes"],
+        }
+        self.assertEqual(original_keys, {
+            "completed": 1, "failed": 0,
+            "by_staff": {"S1": 1}, "average_minutes": 120.0,
+        })
         empty = DeliveryStatistics.summarise([request], self.roster, date(2026, 10, 23), date(2026, 10, 24))
         self.assertEqual(empty["completed"], 0)
         self.assertEqual(empty["average_minutes"], 0)

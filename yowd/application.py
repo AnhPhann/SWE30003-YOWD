@@ -36,6 +36,7 @@ from .operating_hours import (
 )
 from .pricing import SERVICE_ZONES, TariffPolicy, normalise_suburb
 from .models.common import require_text
+from .models.delivery_statistics import REPORTING_PERIODS
 from .serialization import decode_state, encode_state
 from .storage import SQLiteStore
 
@@ -433,10 +434,41 @@ class YowdApplication:
     def retry_pickup(self, request_id: str) -> None:
         self._change(lambda: self._request(request_id).retry_pickup())
 
-    def statistics(self, start: date, end: date) -> dict:
+    def statistics(
+        self, start: date, end: date, staff_id: str | None = None,
+    ) -> dict:
+        """Summarise outcomes for all staff, or for one given worker."""
         return DeliveryStatistics.summarise(
-            self.requests.values(), self.staff_list, start, end,
+            self.requests.values(), self.staff_list, start, end, staff_id,
         )
+
+    @staticmethod
+    def statistics_periods() -> tuple[str, ...]:
+        """Return the named reporting periods for the statistics screen."""
+        return REPORTING_PERIODS
+
+    def statistics_period_range(
+        self, period_name: str, reference_date: date | None = None,
+    ) -> tuple[date, date]:
+        """Return the inclusive dates of a named reporting period.
+
+        The application clock's current date is used when no reference
+        date is given.
+        """
+        if reference_date is None:
+            reference_date = self._clock().date()
+        return DeliveryStatistics.period_range(period_name, reference_date)
+
+    def statistics_staff_choices(self) -> list[tuple[str, str]]:
+        """Return (staff ID, label) pairs for current and former workers."""
+        choices = []
+        for worker in self.staff_list.staff.values():
+            if worker.active:
+                label = worker.name
+            else:
+                label = f"{worker.name} (former)"
+            choices.append((worker.staff_id, label))
+        return choices
 
     def overview(self) -> dict:
         rows = []

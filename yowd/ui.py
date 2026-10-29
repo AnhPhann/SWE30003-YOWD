@@ -16,6 +16,25 @@ from .operating_hours import SUMMARY, next_operating_day
 
 DATE_FORMAT = "%Y-%m-%d %H:%M"
 EXPECTED_ERRORS = (ValueError, RuntimeError, OSError)
+CUSTOM_PERIOD = "Custom"
+ALL_STAFF_LABEL = "All staff"
+
+
+def _format_minutes(total_minutes: float) -> str:
+    """Return a duration as days, hours and minutes, e.g. '1 d 2 h 5 min'."""
+    whole_minutes = int(round(total_minutes))
+    minutes_per_day = 24 * 60
+    days, remaining_minutes = divmod(whole_minutes, minutes_per_day)
+    hours, minutes = divmod(remaining_minutes, 60)
+    parts = []
+    if days:
+        parts.append(f"{days} d")
+    if hours:
+        parts.append(f"{hours} h")
+    # Minutes are always shown when no larger unit was added.
+    if minutes or not parts:
+        parts.append(f"{minutes} min")
+    return " ".join(parts)
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -641,25 +660,83 @@ class MainWindow:
         self.notebook.add(tab, text="Delivery Statistics")
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(2, weight=1)
-        ttk.Label(tab, text="Delivery outcomes by completion period", style="Section.TLabel").grid(
-            row=0, column=0, sticky="w", pady=(0, 12)
-        )
+        ttk.Label(
+            tab, text="Delivery outcomes by completion period",
+            style="Section.TLabel",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 12))
         filters = ttk.Frame(tab)
         filters.grid(row=1, column=0, sticky="w", pady=(0, 12))
-        today = date.today()
-        self.statistics_start = tk.StringVar(self.root, today.replace(day=1).isoformat())
-        self.statistics_end = tk.StringVar(self.root, today.isoformat())
-        ttk.Label(filters, text="From (YYYY-MM-DD)").pack(side="left", padx=(0, 8))
-        ttk.Entry(filters, textvariable=self.statistics_start, width=14).pack(side="left", padx=(0, 18))
-        ttk.Label(filters, text="To (inclusive)").pack(side="left", padx=(0, 8))
-        ttk.Entry(filters, textvariable=self.statistics_end, width=14).pack(side="left", padx=(0, 18))
-        ttk.Button(filters, text="Calculate", command=self._statistics).pack(side="left")
+
+        # The screen opens on the current calendar month.
+        month_start, month_end = self.app.statistics_period_range("Month")
+        self.statistics_start = tk.StringVar(
+            self.root, month_start.isoformat(),
+        )
+        self.statistics_end = tk.StringVar(self.root, month_end.isoformat())
+        self.statistics_period = tk.StringVar(self.root, "Month")
+        self.statistics_staff = tk.StringVar(self.root, ALL_STAFF_LABEL)
+        self.statistics_staff_options: dict[str, str | None] = {
+            ALL_STAFF_LABEL: None,
+        }
+
+        # Row 0: period preset, and the inclusive date range it fills in.
+        ttk.Label(filters, text="Period").grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=4,
+        )
+        period_values = list(self.app.statistics_periods())
+        period_values.append(CUSTOM_PERIOD)
+        self.statistics_period_box = ttk.Combobox(
+            filters, textvariable=self.statistics_period,
+            values=period_values, state="readonly", width=14,
+        )
+        self.statistics_period_box.grid(
+            row=0, column=1, sticky="w", padx=(0, 18), pady=4,
+        )
+        self.statistics_period_box.bind(
+            "<<ComboboxSelected>>", self._apply_statistics_period,
+        )
+        ttk.Label(filters, text="From (YYYY-MM-DD)").grid(
+            row=0, column=2, sticky="w", padx=(0, 8), pady=4,
+        )
+        start_entry = ttk.Entry(
+            filters, textvariable=self.statistics_start, width=14,
+        )
+        start_entry.grid(row=0, column=3, sticky="w", padx=(0, 18), pady=4)
+        ttk.Label(filters, text="To (inclusive)").grid(
+            row=0, column=4, sticky="w", padx=(0, 8), pady=4,
+        )
+        end_entry = ttk.Entry(
+            filters, textvariable=self.statistics_end, width=14,
+        )
+        end_entry.grid(row=0, column=5, sticky="w", padx=(0, 18), pady=4)
+        # Editing either date by hand sets the period preset to Custom.
+        start_entry.bind("<KeyRelease>", self._mark_statistics_period_custom)
+        end_entry.bind("<KeyRelease>", self._mark_statistics_period_custom)
+
+        # Row 1: staff scope (all staff or one worker) and Calculate.
+        ttk.Label(filters, text="Staff").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=4,
+        )
+        self.statistics_staff_box = ttk.Combobox(
+            filters, textvariable=self.statistics_staff,
+            values=[ALL_STAFF_LABEL], state="readonly", width=28,
+        )
+        self.statistics_staff_box.grid(
+            row=1, column=1, columnspan=3, sticky="w", padx=(0, 18), pady=4,
+        )
+        ttk.Button(filters, text="Calculate", command=self._statistics).grid(
+            row=1, column=5, sticky="w", pady=4,
+        )
+
         self.statistics_text = tk.Text(
             tab, wrap="word", state="disabled", font=("Consolas", 11),
             background="#fafbfc", relief="flat", padx=15, pady=15,
         )
         self.statistics_text.grid(row=2, column=0, sticky="nsew")
-        self._set_text(self.statistics_text, "Select a reporting period and choose Calculate.")
+        self._set_text(
+            self.statistics_text,
+            "Select a reporting period and choose Calculate.",
+        )
 
     @staticmethod
     def _set_text(widget: tk.Text, value: str) -> None:
@@ -707,6 +784,7 @@ class MainWindow:
             + (f"  •  {count_text}" if count_text else "")
         )
         self.storage.set("Local data: " + _display(snapshot.get("storage_path", "")))
+        self._refresh_statistics_staff_choices()
         self._show_request()
 
     def _selected_request(self, required: bool = True) -> str | None:
@@ -1041,30 +1119,96 @@ class MainWindow:
         ):
             self._action(lambda: self.app.deactivate_staff(staff_id), f"{name} deactivated.")
 
+    def _apply_statistics_period(self, _event: tk.Event | None = None) -> None:
+        """Fill the From and To dates from the selected named period."""
+        period_name = self.statistics_period.get()
+        if period_name == CUSTOM_PERIOD:
+            return
+        try:
+            start, end = self.app.statistics_period_range(period_name)
+        except EXPECTED_ERRORS as error:
+            messagebox.showerror(
+                "Invalid reporting period", str(error), parent=self.root,
+            )
+            return
+        self.statistics_start.set(start.isoformat())
+        self.statistics_end.set(end.isoformat())
+
+    def _mark_statistics_period_custom(
+        self, _event: tk.Event | None = None,
+    ) -> None:
+        """Set the period preset to Custom after a date is edited by hand."""
+        self.statistics_period.set(CUSTOM_PERIOD)
+
+    def _refresh_statistics_staff_choices(self) -> None:
+        """Rebuild the staff scope list from the current roster."""
+        options: dict[str, str | None] = {ALL_STAFF_LABEL: None}
+        for staff_id, label in self.app.statistics_staff_choices():
+            # A repeated name has the staff ID appended to keep it unique.
+            if label in options:
+                label = f"{label} [{staff_id}]"
+            options[label] = staff_id
+        self.statistics_staff_options = options
+        self.statistics_staff_box.configure(values=list(options))
+        if self.statistics_staff.get() not in options:
+            self.statistics_staff.set(ALL_STAFF_LABEL)
+
     def _statistics(self) -> None:
         try:
             start = _parse_date(self.statistics_start.get())
             end = _parse_date(self.statistics_end.get())
-            result = self.app.statistics(start, end)
+            staff_label = self.statistics_staff.get()
+            staff_id = self.statistics_staff_options.get(staff_label)
+            result = self.app.statistics(start, end, staff_id)
         except EXPECTED_ERRORS as error:
-            messagebox.showerror("Invalid reporting period", str(error), parent=self.root)
+            messagebox.showerror(
+                "Invalid reporting period", str(error), parent=self.root,
+            )
             return
+        completed_count = result.get("completed", 0)
+        failed_count = result.get("failed", 0)
+        period_name = self.statistics_period.get()
         lines = [
-            f"Reporting period: {start.isoformat()} to {end.isoformat()} (inclusive)", "",
-            f"Completed deliveries: {result.get('completed', 0)}",
-            f"Failed outcomes: {result.get('failed', 0)}",
+            f"Reporting period: {period_name}, "
+            f"{start.isoformat()} to {end.isoformat()} (inclusive)",
+            f"Staff scope: {staff_label}",
+            "",
+            f"Completed deliveries: {completed_count}",
+            f"Failed outcomes: {failed_count}",
         ]
-        average = result.get("average_minutes")
-        if average is not None:
-            lines.append(f"Average completion time (minutes): {average}")
-        lines.extend(["", "Completed deliveries by worker:"])
-        by_staff = result.get("by_staff", {})
-        if isinstance(by_staff, dict):
-            lines.extend(f"  {worker}: {count}" for worker, count in by_staff.items())
-        else:
-            lines.append(str(by_staff))
-        if not by_staff:
-            lines.append("  No completed deliveries in this period.")
+        # Averages are only shown when at least one delivery was completed.
+        if completed_count:
+            pickup_average = _format_minutes(
+                result.get("average_pickup_to_delivery_minutes", 0),
+            )
+            lodgement_average = _format_minutes(
+                result.get("average_minutes", 0),
+            )
+            lines.append(
+                f"Average time from pickup to delivery: {pickup_average}"
+            )
+            lines.append(
+                "Average time from request lodgement to delivery: "
+                f"{lodgement_average}"
+            )
+        lines.extend(["", "Results by worker:"])
+        staff_rows = result.get("staff_rows", [])
+        if not staff_rows:
+            lines.append("  No delivery staff are registered.")
+        for row in staff_rows:
+            if row.get("active"):
+                employment = "active"
+            else:
+                employment = "former"
+            completed_text = f"{row.get('completed', 0)} completed"
+            failed_text = f"{row.get('failed', 0)} failed"
+            lines.append(
+                f"  {row.get('name')} ({employment}): "
+                f"{completed_text}, {failed_text}"
+            )
+        if completed_count == 0 and failed_count == 0:
+            lines.append("")
+            lines.append("No completed or failed deliveries in this period.")
         self._set_text(self.statistics_text, "\n".join(lines))
         self.status.set("Statistics calculated from retained delivery outcomes.")
 
