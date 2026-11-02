@@ -219,8 +219,10 @@ class DeliveryRequest:
         if any(parcel.status != ParcelStatus.PENDING for parcel in self.parcels):
             raise DomainError("All required parcels must still be awaiting collection.")
         if not parcel_ok:
+            if self.payment is not None:
+                raise DomainError("A pickup with a recorded payment cannot be discarded as a failed unpaid attempt.")
             reason = self._pickup_failure_reason(failure, parcel_id) # State the Parcel That Failed
-            assignment.end(when, RequestStatus.FAILED_PICKUP.value)
+            assignment.end(when, RequestStatus.FAILED_PICKUP.value, reason)
             self.status = RequestStatus.FAILED_PICKUP
             self.failure_reason = reason # State Specific Failure Reason
             return False
@@ -233,7 +235,11 @@ class DeliveryRequest:
         if not assignment.started_at <= payment.received_at <= when:
             raise DomainError("Payment record time must fall between allocation and this pickup report.")
         if self.payment is not None:
-            raise DomainError("A payment has already been recorded for this request.")
+            if payment is not self.payment:
+                raise DomainError("The payment already recorded for this request must be reused without replacement.")
+            # Legacy records retain their payment while awaiting actual worker confirmation.
+            if not payment.allows_pickup:
+                return False
         
         # Record the Payment and Collect Parcels, Even if the Amount Does Not Match
         self.payment = payment
@@ -242,8 +248,8 @@ class DeliveryRequest:
         self.picked_up_at, self.status = when, RequestStatus.PICKED_UP
         self.failure_reason = ""
         
-        # False Means a Payment Exception was Recorded and the Request is Flagged for Office Staff
-        return not payment.exception
+        # New requests collect first; delivery waits for exception authorisation.
+        return payment.allows_pickup
 
     def delivery_failure_text(
         self, failure: str | None, parcel_id: str | None, details: str,
@@ -309,7 +315,7 @@ class DeliveryRequest:
         if not successful:
             reason = self.delivery_failure_text(failure, parcel_id, reason)
         status = RequestStatus.DELIVERED if successful else RequestStatus.FAILED_DELIVERY
-        assignment.end(when, status.value)
+        assignment.end(when, status.value, reason)
         for parcel in self.parcels:
             parcel.status = ParcelStatus.DELIVERED if successful else ParcelStatus.RETURN_REQUIRED
         self.status = status
@@ -327,4 +333,9 @@ class DeliveryRequest:
             raise DomainError("Retry requires the retained accepted quote.")
         if any(parcel.status != ParcelStatus.PENDING for parcel in self.parcels):
             raise DomainError("Retry requires every parcel to remain awaiting collection.")
+        if self.assignments:
+            last = self.assignments[-1]
+            if (not last.active and last.outcome == RequestStatus.FAILED_PICKUP.value
+                    and not last.outcome_details):
+                last.outcome_details = self.failure_reason
         self.status, self.failure_reason = RequestStatus.ACCEPTED, ""

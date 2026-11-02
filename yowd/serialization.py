@@ -1,4 +1,4 @@
-"""Write version-two domain snapshots and read both current and legacy snapshots.
+"""Write version-three domain snapshots and read versions one, two and three.
 
 Money and measurements use decimal strings; timestamps use naive local ISO
 datetimes. Staff schedules are lists of [start, end] timestamp pairs. Requests
@@ -6,7 +6,8 @@ own their parcels, offer, retained assignments and payment. Customer and worker
 indexes are checked against that graph rather than silently repaired. Historical
 allocations are not reassessed against a worker's current employment or hours.
 Legacy version-one requests retain unknown addresses as blank pairs. Loading
-never writes or invents street addresses from a suburb name.
+never writes or invents street addresses from a suburb name. Version-three
+assignments retain outcome details; older snapshots keep unknown details blank.
 """
 
 from datetime import datetime
@@ -156,12 +157,15 @@ def _decode_parcels(value: Any, seen: set[str]) -> list[Parcel]:
     return parcels
 
 
-def _decode_assignments(value: Any, seen: set[str]) -> list[DeliveryAssignment]:
+def _decode_assignments(value: Any, seen: set[str], version: int) -> list[DeliveryAssignment]:
     assignments = []
     for row in _list(value, "Request assignments"):
-        row = _object(row, {
+        expected_fields = {
             "assignment_id", "request_id", "staff_id", "started_at", "ended_at", "outcome",
-        }, "Assignment")
+        }
+        if version >= 3:
+            expected_fields.add("outcome_details")
+        row = _object(row, expected_fields, "Assignment")
         fields = {key: _identifier(row[key], f"Assignment {key}") for key in (
             "assignment_id", "request_id", "staff_id",
         )}
@@ -170,6 +174,10 @@ def _decode_assignments(value: Any, seen: set[str]) -> list[DeliveryAssignment]:
             started_at=_time(row["started_at"], "Assignment start"),
             ended_at=_time(row["ended_at"], "Assignment end", optional=True),
             outcome=_text(row["outcome"], "Assignment outcome", blank=True),
+            outcome_details=(
+                _text(row["outcome_details"], "Assignment outcome details", blank=True)
+                if version >= 3 else ""
+            ),
         )
         assignments.append(_construct(DeliveryAssignment, fields, "assignment"))
     return assignments
@@ -279,7 +287,7 @@ def decode_state(snapshot: dict) -> tuple[dict[str, Customer], StaffList, dict[s
     snapshot = _object(snapshot, {"schema_version", "customers", "staff", "requests"}, "Snapshot")
     version = snapshot["schema_version"]
     if type(version) is not int or version not in SUPPORTED_SCHEMA_VERSIONS:
-        raise StorageError("Unsupported snapshot schema version; expected 1 or 2.")
+        raise StorageError("Unsupported snapshot schema version; expected 1, 2 or 3.")
 
     customers: dict[str, Customer] = {}
     declared_requests: dict[str, list[str]] = {}
@@ -327,7 +335,7 @@ def decode_state(snapshot: dict) -> tuple[dict[str, Customer], StaffList, dict[s
             "request_id", "customer_id", "pickup", "destination", "parcels", "created_at", "status",
             "quote", "assignments", "payment", "picked_up_at", "completed_at", "failure_reason",
         }
-        if version == 2:
+        if version >= 2:
             fields.update({"pickup_address", "destination_address"})
         row = _object(row, fields, "Request")
         request_id = _identifier(row["request_id"], "Request ID")
@@ -341,16 +349,16 @@ def decode_state(snapshot: dict) -> tuple[dict[str, Customer], StaffList, dict[s
             "pickup": _text(row["pickup"], "Pickup suburb"),
             "destination": _text(row["destination"], "Destination suburb"),
             "pickup_address": (
-                _text(row["pickup_address"], "Pickup address", blank=True) if version == 2 else ""
+                _text(row["pickup_address"], "Pickup address", blank=True) if version >= 2 else ""
             ),
             "destination_address": (
-                _text(row["destination_address"], "Destination address", blank=True) if version == 2 else ""
+                _text(row["destination_address"], "Destination address", blank=True) if version >= 2 else ""
             ),
             "parcels": _decode_parcels(row["parcels"], seen["parcel"]),
             "created_at": _time(row["created_at"], "Request creation"),
             "status": _text(row["status"], "Request status"),
             "quote": _decode_quote(row["quote"], seen["quote"]),
-            "assignments": _decode_assignments(row["assignments"], seen["assignment"]),
+            "assignments": _decode_assignments(row["assignments"], seen["assignment"], version),
             "payment": _decode_payment(row["payment"], seen["payment"]),
             "picked_up_at": _time(row["picked_up_at"], "Pickup time", optional=True),
             "completed_at": _time(row["completed_at"], "Completion time", optional=True),
@@ -441,6 +449,7 @@ def encode_state(
                     "assignment_id": assignment.assignment_id, "request_id": assignment.request_id,
                     "staff_id": assignment.staff_id, "started_at": _encode_time(assignment.started_at),
                     "ended_at": _encode_time(assignment.ended_at), "outcome": assignment.outcome,
+                    "outcome_details": assignment.outcome_details,
                 } for assignment in request.assignments],
                 "payment": None if payment is None else {
                     "payment_id": payment.payment_id, "request_id": payment.request_id,

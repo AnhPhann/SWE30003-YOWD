@@ -13,7 +13,7 @@ from yowd.__main__ import DemoClock, run_demo
 from yowd.application import YowdApplication
 from yowd.models import DomainError, ParcelStatus, RequestStatus
 from yowd.serialization import decode_state, encode_state
-from yowd.storage import SQLiteStore, StorageError
+from yowd.storage import SCHEMA_VERSION, SQLiteStore, StorageError
 
 
 class ApplicationTests(unittest.TestCase):
@@ -256,25 +256,27 @@ class ApplicationTests(unittest.TestCase):
                 self.app.pickup(request_id, self.worker_id, "21", parcel_ok=invalid)
             self.assertEqual(self.snapshot(), before)
 
-    def test_pending_payment_requires_explicit_authorisation_and_worker_confirmation(self):
+    def test_new_payment_exception_collects_parcels_but_requires_authorisation_before_delivery(self):
         request_id = self.allocated()
         self.clock.now += timedelta(hours=1)
         self.app.pickup(request_id, self.worker_id, "20")
         request = self.app.requests[request_id]
         payment_id = request.payment.payment_id
-        self.assertEqual(request.status, RequestStatus.ALLOCATED)
-        self.assertTrue(all(p.status == ParcelStatus.PENDING for p in request.parcels))
+        self.assertEqual(request.status, RequestStatus.PICKED_UP)
+        self.assertTrue(all(p.status == ParcelStatus.COLLECTED for p in request.parcels))
         before = self.snapshot()
         with self.assertRaises(DomainError):
             self.app.pickup(request_id, self.worker_id, "21")
         with self.assertRaises(DomainError):
+            self.app.deliver(request_id, self.worker_id, True)
+        with self.assertRaises(DomainError):
             self.app.authorise_payment(request_id, "", "Approved discount")
         self.assertEqual(self.snapshot(), before)
         self.app.authorise_payment(request_id, "Office manager", "Approved discount")
-        self.assertEqual(self.app.requests[request_id].status, RequestStatus.ALLOCATED)
-        self.app.pickup(request_id, self.worker_id, "20")
         self.assertEqual(self.app.requests[request_id].status, RequestStatus.PICKED_UP)
         self.assertEqual(self.app.requests[request_id].payment.payment_id, payment_id)
+        self.app.deliver(request_id, self.worker_id, True)
+        self.assertEqual(self.app.requests[request_id].status, RequestStatus.DELIVERED)
 
     def test_failed_pickup_then_retry_retains_both_assignments(self):
         request_id = self.allocated()
@@ -466,7 +468,7 @@ class PersistenceIntegrationTests(unittest.TestCase):
         app.update_request_addresses(request_id, "12 Bridge Road", "8 Hopkins Street")
         with SQLiteStore(self.db_path) as store:
             repaired = store.load()
-        self.assertEqual(repaired["schema_version"], 2)
+        self.assertEqual(repaired["schema_version"], SCHEMA_VERSION)
         self.assertEqual(repaired["requests"][0]["pickup_address"], "12 Bridge Road")
         self.assertEqual(app.prepare_quote(request_id), Decimal("25.00"))
         app.close()
@@ -474,7 +476,7 @@ class PersistenceIntegrationTests(unittest.TestCase):
         self.assertEqual(reopened.requests[request_id].status, RequestStatus.QUOTED)
         self.assertEqual(reopened.requests[request_id].destination_address, "8 Hopkins Street")
 
-    def test_restart_restores_pending_payment_and_shared_customer_history(self):
+    def test_restart_restores_collected_payment_exception_and_shared_customer_history(self):
         app = self.open_app()
         app.seed_demo()
         request_id = next(iter(app.requests))
@@ -491,8 +493,9 @@ class PersistenceIntegrationTests(unittest.TestCase):
         self.assertEqual(encode_state(reopened.customers, reopened.staff_list, reopened.requests), before)
         request = reopened.requests[request_id]
         self.assertIs(request.customer, reopened.customers[request.customer.customer_id])
+        self.assertEqual(request.status, RequestStatus.PICKED_UP)
+        self.assertTrue(all(parcel.status == ParcelStatus.COLLECTED for parcel in request.parcels))
         reopened.authorise_payment(request_id, "Office manager", "Goodwill reduction")
-        reopened.pickup(request_id, worker_id, "20")
         self.clock.now = request.quote.delivery_at
         reopened.deliver(request_id, worker_id, True)
         reopened.close()

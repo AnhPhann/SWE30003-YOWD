@@ -1012,7 +1012,13 @@ class MainWindow:
             self.root, "Record pickup and simulated payment",
             [("staff", "Reporting Worker", ""), ("parcels", "Parcel Outcome", ""), ("parcel", "Affected Parcel", ""), ("amount", "Amount Received ($)", _display(amount_default))],
             submit,
-            explanation="Payment is recorded locally; no bank transaction occurs. A payment mismatch requires a separate office authorisation before pickup can complete.",
+            explanation=(
+                "Payment is recorded locally; no bank transaction occurs. "
+                "New pickups collect the parcels and record the received amount. "
+                "A mismatch requires office authorisation before delivery. "
+                "For an older saved payment still awaiting pickup, keep the recorded "
+                "amount and authorise its exception before confirming collection."
+            ),
             choices={"staff": list(choices), "parcels": ["All parcels collected and checked", *failures], "parcel": list(parcels)},
             button_text="Record Pickup",
         )
@@ -1023,6 +1029,7 @@ class MainWindow:
         if request_id is None:
             return
         row = self.request_rows.get(request_id, {})
+        awaiting_pickup = row.get("status") == "Allocated"
         # Only Open the Form When a Payment Exception is Waiting for Authorisation
         if not row.get("payment_exception") or row.get("payment_authorised"):
             messagebox.showinfo(
@@ -1035,7 +1042,11 @@ class MainWindow:
         def save(values: dict[str, str]) -> None:
             self.app.authorise_payment(request_id, values["authorised_by"], values["reason"])
             self.refresh()
-            self.status.set(f"Payment exception authorised for {request_id}. The request can now be delivered.")
+            next_step = (
+                "The worker must confirm pickup using the recorded received amount."
+                if awaiting_pickup else "The request can now be delivered."
+            )
+            self.status.set(f"Payment exception authorised for {request_id}. {next_step}")
 
         FormDialog(
             self.root, "Office Action: Authorise Payment Exception",
@@ -1043,7 +1054,18 @@ class MainWindow:
             save,
 
             # Show Both Amounts so Office Staff Can See the Difference Before Authorising
-            explanation=f"Quoted ${row.get('quote_amount', '')}, Received ${row.get('received_amount', '')}. The parcels have been picked up. Authorise the exception so delivery can continue.",
+            explanation=(
+                f"Quoted ${row.get('quote_amount', '')}, "
+                f"received ${row.get('received_amount', '')}. "
+                + (
+                    "This older saved request still awaits collection. Authorise "
+                    "the exception, then have the assigned worker confirm pickup "
+                    "using the recorded amount."
+                    if awaiting_pickup else
+                    "The parcels have been picked up. Authorise the exception "
+                    "so delivery can continue."
+                )
+            ),
             button_text="Record Authorisation",
         )
 

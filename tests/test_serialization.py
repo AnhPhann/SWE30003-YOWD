@@ -117,16 +117,16 @@ class SerializationTests(unittest.TestCase):
                 self.assertEqual(encode_state(*decode_state(snapshot)), snapshot)
 
     def test_empty_graph_round_trips(self):
-        snapshot = {"schema_version": 2, "customers": [], "staff": [], "requests": []}
+        snapshot = {"schema_version": 3, "customers": [], "staff": [], "requests": []}
         self.assertEqual(encode_state(*decode_state(snapshot)), snapshot)
 
-    def test_version_two_round_trip_preserves_addresses_and_shared_history(self):
+    def test_version_three_round_trip_preserves_addresses_and_shared_history(self):
         graph = make_graph(history=True, two_requests=True)
         for request in graph[2].values():
             request.pickup_address = "12 Swan Street"
             request.destination_address = "8 Hopkins Street"
         snapshot = encode_state(*graph)
-        self.assertEqual(snapshot["schema_version"], 2)
+        self.assertEqual(snapshot["schema_version"], 3)
         self.assertEqual(snapshot["requests"][0]["pickup_address"], "12 Swan Street")
         self.assertEqual(snapshot["requests"][0]["destination_address"], "8 Hopkins Street")
         customers, _, requests = decode_state(snapshot)
@@ -136,6 +136,9 @@ class SerializationTests(unittest.TestCase):
         self.assertIs(first.customer, customers["C1"])
         self.assertIs(first.customer, second.customer)
         self.assertEqual(len(first.assignments), 2)
+        self.assertEqual(first.assignments[0].outcome_details,
+                         "Required parcels were not all collected in acceptable condition.")
+        self.assertEqual(first.assignments[1].outcome_details, "Recipient unavailable")
         self.assertEqual(first.payment.received_amount, Decimal("20.00"))
 
     def test_version_one_lifecycle_graphs_migrate_without_inventing_addresses(self):
@@ -146,6 +149,8 @@ class SerializationTests(unittest.TestCase):
                 for row in legacy["requests"]:
                     row.pop("pickup_address", None)
                     row.pop("destination_address", None)
+                    for assignment in row["assignments"]:
+                        assignment.pop("outcome_details", None)
                 before = deepcopy(legacy)
                 graph = decode_state(legacy)
                 self.assertEqual(legacy, before)
@@ -154,14 +159,54 @@ class SerializationTests(unittest.TestCase):
                 self.assertEqual(getattr(request, "destination_address", None), "")
                 self.assertEqual(request.status, status)
                 migrated = encode_state(*graph)
-                self.assertEqual(migrated["schema_version"], 2)
+                self.assertEqual(migrated["schema_version"], 3)
                 self.assertEqual(migrated["requests"][0]["pickup_address"], "")
                 self.assertEqual(migrated["requests"][0]["destination_address"], "")
                 comparable = deepcopy(migrated)
                 comparable["schema_version"] = 1
                 for row in comparable["requests"]:
                     del row["pickup_address"], row["destination_address"]
+                    for assignment in row["assignments"]:
+                        self.assertEqual(assignment.pop("outcome_details"), "")
                 self.assertEqual(comparable, legacy)
+
+    def test_version_two_graph_defaults_unknown_assignment_details_without_changing_input(self):
+        legacy = self.snapshot(history=True, two_requests=True)
+        legacy["schema_version"] = 2
+        for row in legacy["requests"]:
+            row.update(pickup_address="12 Swan Street", destination_address="8 Hopkins Street")
+            for assignment in row["assignments"]:
+                assignment.pop("outcome_details", None)
+        unchanged = deepcopy(legacy)
+        customers, staff, requests = decode_state(legacy)
+        self.assertEqual(legacy, unchanged)
+        self.assertIs(requests["R1"].customer, customers["C1"])
+        self.assertIs(requests["R2"].customer, customers["C1"])
+        self.assertEqual(staff.get("S1").assignment_ids, ["A1-old", "A1", "A2-old", "A2"])
+        for request in requests.values():
+            self.assertEqual(request.pickup_address, "12 Swan Street")
+            self.assertEqual([getattr(a, "outcome_details", None) for a in request.assignments], ["", ""])
+            self.assertEqual(request.payment.payment_id, f"PAY{request.request_id[1:]}")
+        migrated = encode_state(customers, staff, requests)
+        self.assertEqual(migrated["schema_version"], 3)
+        comparable = deepcopy(migrated)
+        comparable["schema_version"] = 2
+        for row in comparable["requests"]:
+            for assignment in row["assignments"]:
+                assignment.pop("outcome_details")
+        self.assertEqual(comparable, legacy)
+
+    def test_version_three_requires_text_assignment_details(self):
+        for value in (None, 42):
+            with self.subTest(value=value):
+                snapshot = self.snapshot()
+                snapshot["schema_version"] = 3
+                snapshot["requests"][0]["assignments"][0]["outcome_details"] = value
+                self.assert_invalid(snapshot, "details.*string")
+        snapshot = self.snapshot()
+        snapshot["schema_version"] = 3
+        snapshot["requests"][0]["assignments"][0].pop("outcome_details", None)
+        self.assert_invalid(snapshot, "missing fields.*outcome_details")
 
     def test_version_two_requests_require_both_address_fields(self):
         for field in ("pickup_address", "destination_address"):
@@ -204,16 +249,33 @@ class SerializationTests(unittest.TestCase):
         self.assertEqual(json.loads(json.dumps(snapshot)), snapshot)
         self.assertIsInstance(snapshot["requests"][0]["quote"]["amount"], str)
 
-    def test_pending_payment_is_allowed_on_allocated_request(self):
+    def test_modern_mismatched_payment_is_retained_after_pickup_awaiting_authorisation(self):
         graph = make_graph("Allocated")
         request = graph[2]["R1"]
         payment = PaymentRecord("PAY1", "R1", Decimal("25"), Decimal("20"), START + timedelta(hours=1))
         self.assertFalse(request.record_pickup("S1", True, payment, START + timedelta(hours=1)))
         snapshot = encode_state(*graph)
         restored = decode_state(snapshot)[2]["R1"]
-        self.assertEqual(restored.status, RequestStatus.ALLOCATED)
+        self.assertEqual(restored.status, RequestStatus.PICKED_UP)
         self.assertFalse(restored.payment.allows_pickup)
-        self.assertIsNone(restored.picked_up_at)
+        self.assertEqual(restored.picked_up_at, START + timedelta(hours=1))
+
+    def test_legacy_allocated_pending_payment_remains_allocated_when_decoded(self):
+        snapshot = self.snapshot("Allocated")
+        snapshot["schema_version"] = 2
+        snapshot["requests"][0]["assignments"][0].pop("outcome_details", None)
+        snapshot["requests"][0]["payment"] = {
+            "payment_id": "LEGACY-PAY", "request_id": "R1", "quoted_amount": "25.00",
+            "received_amount": "20.00", "received_at": (START + timedelta(hours=1)).isoformat(),
+            "authorised_by": "", "authorisation_reason": "",
+        }
+        unchanged = deepcopy(snapshot)
+        request = decode_state(snapshot)[2]["R1"]
+        self.assertEqual(snapshot, unchanged)
+        self.assertEqual(request.status, RequestStatus.ALLOCATED)
+        self.assertIsNone(request.picked_up_at)
+        self.assertEqual(request.payment.payment_id, "LEGACY-PAY")
+        self.assertFalse(request.payment.allows_pickup)
 
     def test_historical_staff_schedule_and_employment_changes_are_allowed(self):
         graph = make_graph("Picked Up", history=True)
@@ -330,7 +392,7 @@ class SerializationTests(unittest.TestCase):
         snapshot["staff"][0]["assignment_ids"].append("A-extra")
         self.assert_invalid(snapshot, "at most one active")
 
-    def test_pickup_requires_matching_or_authorised_payment(self):
+    def test_recorded_pickup_requires_payment_and_delivery_requires_authorisation(self):
         for stage in ("Picked Up", "Delivered", "Failed delivery"):
             for missing in (False, True):
                 with self.subTest(stage=stage, missing=missing):
@@ -339,7 +401,12 @@ class SerializationTests(unittest.TestCase):
                     payment["authorised_by"] = payment["authorisation_reason"] = ""
                     if missing:
                         snapshot["requests"][0]["payment"] = None
-                    self.assert_invalid(snapshot, "pickup requires matching payment")
+                    if stage == "Picked Up" and not missing:
+                        restored = decode_state(snapshot)[2]["R1"]
+                        self.assertFalse(restored.payment.allows_pickup)
+                    else:
+                        self.assert_invalid(snapshot, "pickup requires a payment" if missing else
+                                            "delivery requires matching payment")
 
     def test_payment_quoted_amount_must_match_quote(self):
         snapshot = self.snapshot()
@@ -353,6 +420,7 @@ class SerializationTests(unittest.TestCase):
         snapshot = self.snapshot("Failed pickup")
         assignment = snapshot["requests"][0]["assignments"][0]
         assignment["ended_at"], assignment["outcome"] = None, ""
+        assignment["outcome_details"] = ""
         self.assert_invalid(snapshot, "cannot have an active assignment")
 
     def test_parcel_and_quote_states_must_match_request_lifecycle(self):

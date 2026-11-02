@@ -73,6 +73,18 @@ class SQLiteStoreTests(unittest.TestCase):
         with self.open_store() as reopened:
             self.assertEqual(reopened.load(), snapshot)
 
+    def test_version_three_snapshot_preserves_assignment_details_when_reopened(self) -> None:
+        snapshot = make_snapshot()
+        snapshot["schema_version"] = 3
+        snapshot["requests"][0]["assignments"] = [{
+            "assignment_id": "A1", "outcome": "Failed pickup",
+            "outcome_details": "Failed Pickup: Parcel damaged - Books (P1).",
+        }]
+        with self.open_store() as store:
+            store.save(snapshot)
+        with self.open_store() as reopened:
+            self.assertEqual(reopened.load(), snapshot)
+
     def test_loading_legacy_snapshot_does_not_rewrite_or_advance_revision(self) -> None:
         encoded = json.dumps(make_snapshot())
         self.write_raw_snapshot(encoded)

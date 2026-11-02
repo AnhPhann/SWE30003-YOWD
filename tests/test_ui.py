@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from yowd.application import YowdApplication
+from yowd.serialization import decode_state, encode_state
 from yowd.storage import SQLiteStore
 
 try:
@@ -89,7 +90,7 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.window._quote()
         dialog = self.dialog()
         self.assertTrue(dialog.variables["pickup"].get())
-        self.invoke(dialog, "Prepare quote")
+        self.invoke(dialog, "Prepare Quote")
         self.window._respond(True)
         self.window._allocate()
         dialog = self.dialog()
@@ -199,11 +200,11 @@ class DesktopIntegrationTests(unittest.TestCase):
         editor = self.dialog(dialog)
         self.assertEqual(editor.variables["description"].get(), "Books")
         self.fill(editor, weight_kg="-5")
-        self.invoke(editor, "Save parcel")
+        self.invoke(editor, "Save Parcel")
         self.assertTrue(editor.winfo_exists())
         self.assertEqual([item["weight_kg"] for item in dialog.parcels], ["2", "2"])
         self.fill(editor, description="Updated books", weight_kg="3")
-        self.invoke(editor, "Save parcel")
+        self.invoke(editor, "Save Parcel")
         self.assertFalse(editor.winfo_exists())
         self.assertEqual([item["description"] for item in dialog.parcels], ["Updated books", "Clothing"])
         self.assertEqual([item["weight_kg"] for item in dialog.parcels], ["3", "2"])
@@ -251,7 +252,7 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.seed_and_select()
         self.window._quote()
         dialog = self.dialog()
-        self.invoke(dialog, "Prepare quote")
+        self.invoke(dialog, "Prepare Quote")
         before = dict(self.app.overview()["requests"][0])
         self.invoke(self.root, "Edit Addresses")
         dialog = self.dialog()
@@ -324,33 +325,61 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.window._delivery(True)
         dialog = self.dialog()
         self.fill(dialog, staff=next(iter(self.window._worker_choices())))
-        self.invoke(dialog, "Record delivered")
+        self.invoke(dialog, "Record Delivered")
         self.assertEqual(self.app.overview()["requests"][0]["status"], "Delivered")
         self.assertIn("Status: Delivered", self.window.details.get("1.0", "end"))
         self.assertIn(request_id, self.window.details.get("1.0", "end"))
         self.show_error.assert_not_called()
 
-    def test_payment_exception_authorisation_requires_later_pickup_confirmation(self) -> None:
+    def test_payment_exception_authorisation_unlocks_delivery_after_pickup(self) -> None:
         self.quote_accept_allocate()
         self.pickup("1.00")
         row = self.app.overview()["requests"][0]
-        self.assertEqual(row["status"], "Allocated")
+        self.assertEqual(row["status"], "Picked Up")
         self.assertTrue(row["payment_exception"])
+        self.window._delivery(True)
+        dialog = self.dialog()
+        self.fill(dialog, staff=next(iter(self.window._worker_choices())))
+        self.invoke(dialog, "Record Delivered")
+        self.assertTrue(dialog.winfo_exists())
+        self.assertTrue(dialog.error.get())
+        self.assertEqual(self.app.overview()["requests"][0]["status"], "Picked Up")
+        self.invoke(dialog, "Cancel")
         self.window._authorise()
         dialog = self.dialog()
         self.fill(dialog, authorised_by="Office manager", reason="Approved business exception")
-        self.invoke(dialog, "Record authorisation")
-        self.assertEqual(self.app.overview()["requests"][0]["status"], "Allocated")
-        self.assertIn("confirm pickup again", self.window.status.get())
-        self.window._pickup()
-        dialog = self.dialog()
-        self.assertEqual(dialog.variables["amount"].get(), "1.00")
-        self.fill(
-            dialog, staff=next(iter(self.window._worker_choices())),
-            parcels="All parcels collected and checked",
-        )
-        self.invoke(dialog, "Record Pickup")
+        self.invoke(dialog, "Record Authorisation")
         self.assertEqual(self.app.overview()["requests"][0]["status"], "Picked Up")
+        self.assertIn("can now be delivered", self.window.status.get())
+        self.window._delivery(True)
+        dialog = self.dialog()
+        self.fill(dialog, staff=next(iter(self.window._worker_choices())))
+        self.invoke(dialog, "Record Delivered")
+        self.assertEqual(self.app.overview()["requests"][0]["status"], "Delivered")
+        self.show_error.assert_not_called()
+
+    def test_legacy_pending_payment_can_be_authorised_then_confirmed_in_ui(self) -> None:
+        request_id, _staff_id = self.quote_accept_allocate()
+        self.pickup("1.00")
+        snapshot = encode_state(self.app.customers, self.app.staff_list, self.app.requests)
+        record = snapshot["requests"][0]
+        record["status"] = "Allocated"
+        record["picked_up_at"] = None
+        for parcel in record["parcels"]:
+            parcel["status"] = "Pending"
+        self.app.customers, self.app.staff_list, self.app.requests = decode_state(snapshot)
+        payment_id = self.app.requests[request_id].payment.payment_id
+        self.window.refresh(request_id=request_id)
+        self.window._authorise()
+        dialog = self.dialog()
+        self.fill(dialog, authorised_by="Office manager", reason="Approved old exception")
+        self.invoke(dialog, "Record Authorisation")
+        self.assertFalse(dialog.winfo_exists())
+        self.assertEqual(self.app.requests[request_id].status.value, "Allocated")
+        self.assertIn("confirm pickup", self.window.status.get())
+        self.pickup("1.00")
+        self.assertEqual(self.app.requests[request_id].status.value, "Picked Up")
+        self.assertEqual(self.app.requests[request_id].payment.payment_id, payment_id)
         self.show_error.assert_not_called()
 
     def test_failed_pickup_retry_failed_delivery_and_statistics_forms(self) -> None:
@@ -359,7 +388,7 @@ class DesktopIntegrationTests(unittest.TestCase):
         dialog = self.dialog()
         self.fill(
             dialog, staff=next(iter(self.window._worker_choices())),
-            parcels="Pickup failed / parcels not collected",
+            parcels="Failed: Customer not present",
         )
         self.invoke(dialog, "Record Pickup")
         row = self.app.overview()["requests"][0]
@@ -375,11 +404,11 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.window._delivery(False)
         dialog = self.dialog()
         self.fill(dialog, staff=next(iter(self.window._worker_choices())))
-        self.invoke(dialog, "Record failed delivery")
+        self.invoke(dialog, "Record Failed Delivery")
         self.assertTrue(dialog.winfo_exists())
         self.assertIn("reason", dialog.error.get())
         self.fill(dialog, reason="Recipient unavailable")
-        self.invoke(dialog, "Record failed delivery")
+        self.invoke(dialog, "Record Failed Delivery")
         row = self.app.overview()["requests"][0]
         self.assertEqual(row["status"], "Failed delivery")
         self.assertEqual(row["payment"], "Recorded")

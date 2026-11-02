@@ -194,24 +194,27 @@ class DomainTests(unittest.TestCase):
             first.allocate(self.worker, "A3", self.now + timedelta(minutes=6))
         self.assertEqual(len(first.assignments), 1)
 
-    def test_payment_mismatch_waits_for_explicit_authorisation(self):
+    def test_new_payment_mismatch_collects_parcels_and_waits_for_authorisation_before_delivery(self):
         request = self.allocated()
         payment = self.payment(request, "20")
         self.assertFalse(request.record_pickup("S1", True, payment, self.now + timedelta(hours=1)))
         self.assertIs(request.payment, payment)
-        self.assertEqual(request.status, RequestStatus.ALLOCATED)
-        self.assertTrue(all(parcel.status == ParcelStatus.PENDING for parcel in request.parcels))
+        self.assertEqual(request.status, RequestStatus.PICKED_UP)
+        self.assertTrue(all(parcel.status == ParcelStatus.COLLECTED for parcel in request.parcels))
+        with self.assertRaises(DomainError):
+            request.record_delivery("S1", True, "", self.now + timedelta(hours=2))
         with self.assertRaises(DomainError):
             payment.authorise("", "Approved short payment")
         payment.authorise("Office manager", "Approved goodwill reduction")
-        self.assertTrue(request.record_pickup("S1", True, payment, self.now + timedelta(hours=1, minutes=2)))
-        self.assertEqual(request.status, RequestStatus.PICKED_UP)
+        request.record_delivery("S1", True, "", self.now + timedelta(hours=2))
+        self.assertEqual(request.status, RequestStatus.DELIVERED)
         self.assertIs(request.payment, payment)
 
     def test_pending_payment_cannot_be_overwritten_or_discarded(self):
         request = self.allocated()
         original = self.payment(request, "20")
-        request.record_pickup("S1", True, original, self.now + timedelta(hours=1))
+        # Legacy saved requests can already hold payment before pickup confirmation.
+        request.payment = original
         with self.assertRaises(DomainError):
             request.record_pickup("S1", True, self.payment(request, "25"), self.now + timedelta(hours=1))
         with self.assertRaises(DomainError):

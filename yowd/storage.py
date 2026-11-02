@@ -16,8 +16,8 @@ import sqlite3
 from typing import Any
 
 
-SCHEMA_VERSION = 2
-SUPPORTED_SCHEMA_VERSIONS = (1, SCHEMA_VERSION)
+SCHEMA_VERSION = 3
+SUPPORTED_SCHEMA_VERSIONS = (1, 2, SCHEMA_VERSION)
 
 
 class StorageError(RuntimeError):
@@ -157,7 +157,7 @@ class SQLiteStore:
         if type(version) is not int or version not in SUPPORTED_SCHEMA_VERSIONS:
             raise StorageError(
                 f"Unsupported snapshot schema version {version!r}; "
-                "expected 1 or 2."
+                "expected 1, 2 or 3."
             )
 
     @staticmethod

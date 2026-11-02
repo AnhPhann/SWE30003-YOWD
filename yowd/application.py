@@ -393,12 +393,21 @@ class YowdApplication:
             if request.quote is None:
                 raise DomainError("Pickup requires an accepted quote and allocation.")
             amount = _number(received_amount, "Received amount")
-            payment = PaymentRecord(
-                _identifier("PAY"), request_id, request.quote.amount,
-                amount, self._clock(),
-            )
-            matched = request.record_pickup(staff_id, True, payment, self._clock())
-            if matched:
+            payment = request.payment
+            if payment is None:
+                payment = PaymentRecord(
+                    _identifier("PAY"), request_id, request.quote.amount,
+                    amount, self._clock(),
+                )
+            elif amount != payment.received_amount:
+                raise DomainError("The received amount must match the payment already recorded for this request.")
+            authorised = request.record_pickup(staff_id, True, payment, self._clock())
+            if request.status == RequestStatus.ALLOCATED:
+                return (
+                    "Pickup is awaiting Office Staff payment authorisation. "
+                    "The existing payment is retained and parcels remain awaiting collection."
+                )
+            if authorised:
                 return "Pickup recorded. Payment outcome saved; no bank transaction was performed."
             
             # Amount Did Not Match it was Picked Up, but Flagged for Office Staff
@@ -410,8 +419,8 @@ class YowdApplication:
     def authorise_payment(self, request_id: str, authorised_by: str, reason: str) -> None:
         def approve() -> None:
             request = self._request(request_id)
-            if request.status != RequestStatus.PICKED_UP or request.payment is None:
-                raise DomainError("Only a picked-up request with a payment exception can be authorised.")
+            if request.status not in {RequestStatus.ALLOCATED, RequestStatus.PICKED_UP} or request.payment is None:
+                raise DomainError("Only an allocated or picked-up request with a payment exception can be authorised.")
             
             if not request.payment.exception:
                 raise DomainError("This payment matches the quote and needs no exception authorisation.")
@@ -557,6 +566,10 @@ class YowdApplication:
             f"Destination address: {request.destination_address or 'Not recorded'}",
             f"Status: {request.status.value}",
             f"Lodged: {request.created_at:%Y-%m-%d %H:%M}",
+            "Actual pickup: " + (
+                f"{request.picked_up_at:%Y-%m-%d %H:%M}"
+                if request.picked_up_at else "Not recorded"
+            ),
             "", "Parcels:",
         ]
         for parcel in request.parcels:
@@ -584,6 +597,13 @@ class YowdApplication:
             worker = self.staff_list.get(assignment.staff_id)
             outcome = "Active" if assignment.active else assignment.outcome
             lines.append(f"  {assignment.assignment_id}: {worker.name}; {outcome}")
+            lines.append(f"    Started: {assignment.started_at:%Y-%m-%d %H:%M}")
+            lines.append("    Ended: " + (
+                f"{assignment.ended_at:%Y-%m-%d %H:%M}"
+                if assignment.ended_at else "Active"
+            ))
+            if assignment.outcome_details:
+                lines.append(f"    Outcome details: {assignment.outcome_details}")
         if request.payment:
             payment = request.payment
             lines.extend([
