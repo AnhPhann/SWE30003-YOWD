@@ -4,9 +4,9 @@ import argparse
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 from .application import YowdApplication
+from .paths import default_database_path
 
 
 @dataclass
@@ -47,8 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.demo and args.check_ui:
         parser.error("Choose --demo or --check-ui, not both.")
-    default_db = Path(__file__).resolve().parent.parent / "data" / "yowd.sqlite3"
-    db_path = args.db or (":memory:" if args.demo or args.check_ui else default_db)
+    db_path = args.db or (":memory:" if args.demo or args.check_ui else default_database_path())
     app = None
     try:
         clock = DemoClock(datetime.now()) if args.demo else None
