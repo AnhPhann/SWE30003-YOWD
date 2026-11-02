@@ -72,19 +72,21 @@ Decimal arithmetic is used and the final amount is rounded to cents. The policy 
 
 Estimated windows account for request age and roster availability. The policy applies a 15-minute lead time and 15-minute priority-rank increments, then selects a covering available worker window. Duration is 60 minutes within a zone and 90 minutes across zones. Issuing a quote does not create an assignment or reserve the worker. Allocation checks the selected worker's current eligibility again.
 
-## 6. Payment exception authorisation precedes pickup
+## 6. Payment exception authorisation precedes delivery
 
-**A2 clarification:** the assumption requiring business authorisation takes precedence over the scenario text that previously allowed Picked Up before approval.
+**Implementation refinement:** collection is recorded when the worker reports it. A payment mismatch is an unresolved business decision that blocks delivery, rather than concealing an already reported physical pickup. This changes the earlier approval-before-pickup timing.
 
-When all parcels pass collection checks, the request validates that the payment record concerns its own accepted quote. Matching payment permits Picked Up. A mismatch is retained as a pending record, while the request stays Allocated and the parcels stay Pending.
+When all parcels pass collection checks, the request validates the payment against its accepted quote, records Picked Up and collects all parcels. A mismatch remains unauthorised, preventing both successful and failed delivery reporting until an office decision is recorded.
 
-An office action must record both the authorising person's name and the reason. The allocated worker then confirms pickup again using the same retained payment. Authorisation alone never marks parcels collected. The application does not process a financial transaction or assume that an entered office name has been authenticated.
+An office action records both the authorising person's name and reason. New requests need no second pickup. The application records a simulated payment outcome; it does not process a bank transaction or authenticate an entered office name.
+
+Older saved Allocated requests may already hold a payment while parcels are Pending. They load without invented collection or automatic migration. The office can authorise the retained payment, then the allocated worker confirms actual collection using its existing ID, amount and received time. An unapproved confirmation leaves the legacy request Allocated. A changed amount, replacement payment or wrong reporter is rejected.
 
 If the required parcels cannot be collected, the request becomes Failed pickup, its assignment ends and no payment record is created. The starter rejects a failed-pickup report that would discard an already pending payment outcome; that exception must first be resolved explicitly.
 
 ## 7. Pickup retry and failed-delivery history
 
-Pickup retry is an explicit office action, permitted only after Failed pickup when there is no active assignment and no payment. It returns the request to Accepted, preserves the accepted quote and retains the ended assignment. A new allocation creates another assignment record.
+Pickup retry is an explicit office action, permitted only after Failed pickup when there is no active assignment and no payment. It returns the request to Accepted, preserves the accepted quote and retains the ended assignment. `DeliveryAssignment.outcome_details` preserves the specific failure reason and affected-parcel text after the current request reason is cleared. Known details from an older failed request are retained before retry; unknown older details are not invented. A new allocation creates another assignment record.
 
 Delivery reporting requires Picked Up, the active assignment and the correct reporting worker. Successful handover changes all collected parcels to Delivered, records the completion time and ends the assignment. Failed delivery requires a reason, ends the assignment, retains the payment and flags the collected parcels as Return required. This flag does not claim the parcels have physically reached the depot.
 
@@ -102,7 +104,7 @@ Statistics are derived from requests and assignments. There is no separate table
 
 `SQLiteStore` writes a single schema-versioned JSON application snapshot inside one SQLite row. Each complete save is transactional. Revision comparison prevents an application instance from silently overwriting a state saved by another instance after it loaded its own copy. A conflict is reported rather than silently choosing a winner.
 
-New snapshots use schema 2 and include both address keys. The decoder and storage boundary continue to accept schema 1, restoring its unknown addresses as blank pairs while preserving lifecycle state, payments, assignments and shared customer identities. Schema 2 requires both keys and rejects invalid partial pairs. Loading an older file alone does not rewrite its snapshot or advance its revision; a successful later save writes schema 2. The older starter cannot read schema 2, so use a separate test database when comparing versions.
+New snapshots use schema 3 and require assignment outcome details as text. Schemas 1 and 2 remain readable with unknown assignment details blank. Version 1 can also lack addresses; version 2 requires address keys. The loader preserves lifecycle states, payments, assignments and shared identities. Loading alone does not rewrite a snapshot or advance its revision; a successful later save writes schema 3. Older applications cannot read schema 3, so use a separate database when comparing versions.
 
 This design gives the starter a small persistence boundary and preserves the object graph. It does not provide a normalised relational schema, per-record concurrent editing, user permissions or a multi-user service.
 
@@ -137,3 +139,9 @@ For each agreed improvement, record:
 5. Any remaining technical limitation.
 
 Keep this record consistent with implemented behaviour and test results.
+
+## 12. Visible history and packaged data
+
+Request details distinguish the quoted estimates from the actual pickup time and show assignment start/end times and retained outcome details. Statistics count current final request outcomes in the selected period; the failed total is not a count of every historical failed pickup attempt.
+
+Python source keeps its existing project-relative database. The frozen Windows app uses a stable per-user LocalAppData location, independent of its extraction or working directory. Explicit `--db` overrides either default. A reproducible one-folder PyInstaller build includes the runtime and packages source separately from executable files in the same ZIP. User records and caches are excluded.

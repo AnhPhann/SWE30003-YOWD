@@ -26,7 +26,7 @@ Use a separate database file for independent demonstration data:
 python run.py --db data/my-review.sqlite3
 ```
 
-Use a separate test database when reviewing this version alongside the older starter. New saves use snapshot schema 2, which the older starter cannot read. This version can load schema 1 without rewriting it merely on startup; a later successful change saves schema 2.
+Use a separate test database when comparing versions. New saves use snapshot schema 3, which includes retained assignment outcome details. This version reads schemas 1, 2 and 3 without rewriting merely on startup; the next successful change saves schema 3. Older application versions cannot open schema 3 saves.
 
 Run the scripted terminal demonstration without changing an existing database:
 
@@ -50,7 +50,7 @@ The desktop interface groups work into Delivery requests, Staff and availability
 2. Create a customer request with complete pickup and destination address text and separate configured suburbs. Add at least one parcel with a description, weight and dimensions. Invalid draft parcels are rejected immediately. Use **Edit selected parcel** to correct a row or remove it before submitting; cancellation preserves the previous draft.
 3. Use **Edit addresses** to correct a Requested delivery before preparing its quote. Then check the quote's sample price and estimated window and record acceptance or decline. Address changes after quotation are rejected so the existing offer keeps its original delivery context.
 4. Allocate an active worker whose schedule covers the full quoted window. An existing job in the same window does not, by itself, make the worker ineligible under the agreed A2 simplification.
-5. Record collection as the allocated worker. Matching payment allows pickup. A mismatched payment is retained as pending and requires an explicit office authorisation before the worker confirms pickup again.
+5. Record collection as the allocated worker. The parcels become collected and the received amount is saved. A mismatch keeps the request Picked Up but blocks delivery until office authorisation. There is no second pickup for a new request. An older saved Allocated request that already holds a mismatched payment can be authorised and then confirmed by its worker using that same payment record.
 6. Record successful delivery or a failed delivery with a reason. Both close the active assignment. Failed delivery retains the pickup payment and flags the collected parcels as requiring return.
 7. Calculate statistics for an inclusive date range. Completed deliveries use completion dates, including deliveries performed by workers who are now inactive.
 8. Close and reopen the application with the same database to inspect the restored records.
@@ -69,9 +69,9 @@ These are implementation assumptions for team review, not a real YOWD tariff or 
 - All datetimes are naive local Melbourne times. Enter desktop date/time values as `YYYY-MM-DD HH:MM` and statistics dates as `YYYY-MM-DD`.
 - Pickup and handover operate on all required parcels together. Partial collection and partial delivery need a separate agreed design.
 - Payments are simulated outcome records. Office authorisation records an entered name and reason; the starter does not authenticate that person.
-- A payment mismatch keeps the request Allocated and the parcels Pending. After office authorisation, the allocated worker must confirm pickup again. Recording authorisation alone does not change the delivery status.
-- Failed pickup creates no payment record and closes its assignment. An explicit office retry returns it to Accepted while retaining the previous assignment. Failed delivery preserves the payment already recorded at pickup.
-- SQLite stores one versioned JSON application snapshot. Schema 2 records both delivery addresses and accepts migrated legacy blank pairs. Schema 1 is still readable, and loading alone does not advance the saved revision or migrate its contents. Revision checks prevent silent replacement of a newer snapshot by an older instance. This is a local starter persistence design, not a full relational data model or multi-user server.
+- A new pickup with a payment mismatch records Picked Up and collected parcels. Office authorisation is required before either delivery outcome. Older saved Allocated requests with existing payment stay uncollected until authorisation and an actual worker confirmation; loading or authorisation alone never invents collection.
+- Failed pickup creates no payment record and closes its assignment. An explicit office retry returns it to Accepted while retaining the previous assignment, specific reason and affected-parcel text. A failed pickup cannot discard an existing payment. Failed delivery preserves payment and records its detailed outcome in the ended assignment.
+- SQLite stores one versioned JSON application snapshot. Schema 3 adds assignment outcome details; schema 2 supplies addresses and schema 1 can omit them. Unknown old details remain blank. Loading alone does not advance the saved revision or migrate contents. Revision checks prevent silent replacement of a newer snapshot by an older instance. This is local persistence, not a multi-user server.
 
 Implementation rationale is recorded in [Design decisions](docs/DESIGN_DECISIONS.md). [Technical integration notes](docs/TEAM_HANDOFF.md) describe shared interfaces, snapshot compatibility and business invariants. [Verification results](docs/VERIFICATION.md) record the tested environment and checks.
 
@@ -81,6 +81,7 @@ Implementation rationale is recorded in [Design decisions](docs/DESIGN_DECISIONS
 run.py                       Terminal entry point
 start-yowd.bat               Windows launcher
 yowd/__main__.py             Command-line options and startup
+yowd/paths.py                Source and packaged-app database locations
 yowd/application.py          Application facade for screens and demonstrations
 yowd/operating_hours.py       Weekday operating calendar used by availability and quotes
 yowd/pricing.py              Sample service zones, tariff and duration policy
@@ -107,10 +108,32 @@ yowd/models/delivery_statistics.py
                              DeliveryStatistics
 tests/                       Domain, application, persistence and desktop checks
 docs/                        Technical decisions, integration notes and checks
+tools/build_windows.py       Reproducible Windows build and source/executable ZIP
 ```
 
 Use [PEP 8](https://peps.python.org/pep-0008/) as the coding standard when extending the project. Keep business validation in the domain/application layer, rather than duplicating it inside a button callback. New business behaviour needs tests for both the intended outcome and rejected operations.
 
-## Runtime and packaging status
+## Windows executable and local package
 
-This source package requires Python with Tkinter installed. A standalone executable has not been built. Verify launch, database location and save/reopen on the target computer when preparing an executable package.
+The Windows package contains `windows/YOWD/YOWD.exe` with its `_internal` runtime folder, plus the current Python project in `source/`. Extract the entire archive and keep those runtime files together. Double-click `YOWD.exe`; Python is not required on the target Windows computer. A console window opens with the desktop application and supports diagnostic commands.
+
+The packaged app creates its database at `%LOCALAPPDATA%\YOWD\yowd.sqlite3`. Running Python source keeps the existing project-relative `data/yowd.sqlite3`. Use `--db` with an explicit path to select another database. Diagnostics `--demo` and `--check-ui` default to disposable memory databases.
+
+Build on Windows using an isolated environment:
+
+```text
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.venv\Scripts\python.exe tools\build_windows.py
+```
+
+The build uses [PyInstaller](https://pyinstaller.org/en/stable/usage.html), pinned in the build requirements. It writes `dist/windows/YOWD/YOWD.exe` and `dist/YOWD-Windows-Source.zip`. The ZIP includes source and executable/runtime files while excluding user databases, caches, Git metadata and build environments. Build dependencies are not application runtime requirements.
+
+Run the packaged checks from `windows/YOWD` after extracting:
+
+```text
+.\YOWD.exe --demo
+.\YOWD.exe --check-ui
+```
+
+Current checks and the exact tested platform are recorded in `docs/VERIFICATION.md`. A test on this machine does not replace the group's independent check on another Windows computer.

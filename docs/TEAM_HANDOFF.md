@@ -20,11 +20,11 @@ New calls to `YowdApplication.create_request(...)` must supply `pickup_address=`
 
 ## Snapshot compatibility
 
-- New saves use schema 2, with both address keys present.
-- Schema 1 remains readable. Unknown legacy addresses are restored as a blank pair, with lifecycle and related history preserved.
-- Loading alone does not rewrite a snapshot or advance its revision. The next successful business change saves schema 2.
+- New saves use schema 3, with both address keys and assignment `outcome_details` present.
+- Schemas 1 and 2 remain readable. Unknown legacy addresses/details stay blank, with lifecycle and related history preserved.
+- Loading alone does not rewrite a snapshot or advance its revision. The next successful business change saves schema 3.
 - A legacy Requested record needs both addresses before a new quote can be issued. Existing historical quotes are restored without being recalculated.
-- The older starter cannot read schema 2. Use a separate database when comparing versions.
+- Older applications cannot read schema 3. Use a separate database when comparing versions.
 - Preserve shared Customer objects, assignment history, worker references and pending payment records when changing serialization.
 
 ## Operating hours and availability
@@ -37,8 +37,8 @@ New calls to `YowdApplication.create_request(...)` must supply `pickup_address=`
 
 - A quote does not create an assignment or reserve a worker. Allocation rechecks employment status and full-window availability.
 - A request retains zero or more assignments, with at most one active assignment, and zero or one current payment record.
-- A payment mismatch keeps the request Allocated and parcels Pending. Office authorisation is recorded separately; the worker must confirm pickup again.
-- Failed pickup closes its assignment without creating payment. Retry retains the ended assignment. Failed delivery preserves payment and marks collected parcels Return required.
+- A new pickup with mismatched payment records Picked Up/Collected. Office authorisation is required before delivery, with no second pickup. Legacy Allocated records already holding payment require office authorisation and a worker confirmation that reuses the existing payment.
+- Failed pickup closes its assignment without creating payment. Retry retains the ended assignment and its detailed reason/affected parcel. Failed delivery preserves payment and marks collected parcels Return required.
 - Statistics count completed requests by completion date and retain attribution to former workers.
 - Rejected operations and failed saves must leave the preceding business state intact.
 
@@ -47,3 +47,7 @@ New calls to `YowdApplication.create_request(...)` must supply `pickup_address=`
 Run `python -m unittest discover -s tests -v` after changes crossing these boundaries. Check startup with `python -m yowd --check-ui` and the connected workflow with `python run.py --demo`. Current results and environment details are in `VERIFICATION.md`.
 
 Use a separate local database for manual checks. Runtime databases, caches and build output are excluded from source control by `.gitignore`.
+
+## Packaged runtime
+
+`yowd/paths.py` keeps source data in the project and frozen Windows data under the user's LocalAppData directory. `--db` overrides this choice. Install `requirements-build.txt` in an isolated environment and run `tools/build_windows.py` on Windows to produce the source/executable archive. Inspect and run the extracted package before distributing it; no build action publishes anything.
