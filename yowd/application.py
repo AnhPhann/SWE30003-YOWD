@@ -638,11 +638,15 @@ class YowdApplication:
             "", "Parcels:",
         ]
         for parcel in request.parcels:
-            lines.append(
+            parcel_line = (
                 f"  {parcel.description}: {parcel.weight_kg} kg, "
                 f"{parcel.length_cm} x {parcel.width_cm} x {parcel.height_cm} cm; "
                 f"{parcel.status.value}"
             )
+            # A recorded parcel exception is shown on that parcel's line.
+            if parcel.has_exception:
+                parcel_line += f"; exception: {parcel.exception}"
+            lines.append(parcel_line)
         if request.quote:
             quote = request.quote
             lines.extend([

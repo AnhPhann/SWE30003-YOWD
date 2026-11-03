@@ -137,18 +137,35 @@ def _decode_payment(value: Any, seen: set[str]) -> PaymentRecord | None:
     return _construct(PaymentRecord, fields, "payment")
 
 
-def _decode_parcels(value: Any, seen: set[str]) -> list[Parcel]:
+def _decode_parcels(value: Any, seen: set[str], version: int) -> list[Parcel]:
+    """Restore parcels.
+
+    Version 4 requires each parcel's exception text. Earlier versions had
+    no exception field: it may be absent, or present and blank.
+    """
     parcels = []
     for row in _list(value, "Request parcels"):
-        row = _object(row, {
+        expected_fields = {
             "parcel_id", "description", "weight_kg", "length_cm", "width_cm", "height_cm", "status",
-        }, "Parcel")
+        }
+        has_exception_field = isinstance(row, dict) and "exception" in row
+        if version >= 4 or has_exception_field:
+            expected_fields.add("exception")
+        row = _object(row, expected_fields, "Parcel")
         parcel_id = _identifier(row["parcel_id"], "Parcel ID")
         _unique(seen, parcel_id, "parcel")
+        exception = ""
+        if "exception" in row:
+            exception = _text(row["exception"], "Parcel exception", blank=True)
+        if version < 4 and exception:
+            raise StorageError(
+                f"Parcel {parcel_id}: exceptions need snapshot version 4."
+            )
         fields = {
             "parcel_id": parcel_id,
             "description": _text(row["description"], "Parcel description"),
             "status": _text(row["status"], "Parcel status"),
+            "exception": exception,
         }
         fields.update({key: _decimal(row[key], f"Parcel {key}") for key in (
             "weight_kg", "length_cm", "width_cm", "height_cm",
@@ -242,6 +259,14 @@ def _check_lifecycle(request: DeliveryRequest) -> None:
     }.get(status, ParcelStatus.PENDING)
     require(all(parcel.status == expected_parcel for parcel in request.parcels),
             "parcel states do not match the request status")
+    # A parcel exception is only kept on a failed pickup or failed delivery.
+    failed_statuses = (
+        RequestStatus.FAILED_PICKUP, RequestStatus.FAILED_DELIVERY,
+    )
+    if status not in failed_statuses:
+        for parcel in request.parcels:
+            require(not parcel.has_exception,
+                    "parcel exceptions are only allowed on a failed request")
 
     if status not in after_pickup:
         require(request.picked_up_at is None and request.completed_at is None,
@@ -287,7 +312,9 @@ def decode_state(snapshot: dict) -> tuple[dict[str, Customer], StaffList, dict[s
     snapshot = _object(snapshot, {"schema_version", "customers", "staff", "requests"}, "Snapshot")
     version = snapshot["schema_version"]
     if type(version) is not int or version not in SUPPORTED_SCHEMA_VERSIONS:
-        raise StorageError("Unsupported snapshot schema version; expected 1, 2 or 3.")
+        raise StorageError(
+            "Unsupported snapshot schema version; expected 1, 2, 3 or 4."
+        )
 
     customers: dict[str, Customer] = {}
     declared_requests: dict[str, list[str]] = {}
@@ -354,7 +381,9 @@ def decode_state(snapshot: dict) -> tuple[dict[str, Customer], StaffList, dict[s
             "destination_address": (
                 _text(row["destination_address"], "Destination address", blank=True) if version >= 2 else ""
             ),
-            "parcels": _decode_parcels(row["parcels"], seen["parcel"]),
+            "parcels": _decode_parcels(
+                row["parcels"], seen["parcel"], version,
+            ),
             "created_at": _time(row["created_at"], "Request creation"),
             "status": _text(row["status"], "Request status"),
             "quote": _decode_quote(row["quote"], seen["quote"]),
@@ -439,6 +468,7 @@ def encode_state(
                         "weight_kg", "length_cm", "width_cm", "height_cm",
                     )},
                     "status": ParcelStatus(parcel.status).value,
+                    "exception": parcel.exception,
                 } for parcel in request.parcels],
                 "quote": None if quote is None else {
                     "quote_id": quote.quote_id, "request_id": quote.request_id, "amount": str(quote.amount),

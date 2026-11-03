@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .common import (
-    DeliveryFailure, DomainError, ParcelStatus, PickupFailure, QuoteDecision,
-    RequestStatus, local_datetime, require_text,
+    PARCEL_EXCEPTION_BY_FAILURE, DeliveryFailure, DomainError, ParcelStatus,
+    PickupFailure, QuoteDecision, RequestStatus, local_datetime, require_text,
 )
 from .customer import Customer
 from .delivery_assignment import DeliveryAssignment
@@ -55,6 +55,13 @@ class DeliveryRequest:
             raise DomainError("Parcel IDs must be unique within a request.")
         for parcel in self.parcels:
             parcel.validate()
+            # Each parcel knows the request it belongs to (A2 Parcel CRC).
+            if not parcel.request_id:
+                parcel.request_id = request_id
+            elif parcel.request_id != request_id:
+                raise DomainError(
+                    f"Parcel {parcel.parcel_id} belongs to another request."
+                )
         try:
             status = RequestStatus(self.status)
         except (ValueError, TypeError):
@@ -228,6 +235,21 @@ class DeliveryRequest:
         self.status = RequestStatus.ALLOCATED
         self.failure_reason = ""
 
+    def _flag_affected_parcel(
+        self, failure: str | None, parcel_id: str | None,
+    ) -> None:
+        """Record a missing, damaged or mismatched parcel on that parcel.
+
+        Failure reasons that do not concern one parcel record nothing.
+        The parcel has already been checked by the failure text methods.
+        """
+        exception = PARCEL_EXCEPTION_BY_FAILURE.get(failure)
+        if exception is None:
+            return
+        for parcel in self.parcels:
+            if parcel.parcel_id == parcel_id:
+                parcel.record_exception(exception)
+
     def _pickup_failure_reason(self, failure: str | None, parcel_id: str | None) -> str:
         # Check Failure Reason and Return Specific Fail Text
 
@@ -261,6 +283,7 @@ class DeliveryRequest:
                 raise DomainError("A pickup with a recorded payment cannot be discarded as a failed unpaid attempt.")
             reason = self._pickup_failure_reason(failure, parcel_id) # State the Parcel That Failed
             assignment.end(when, RequestStatus.FAILED_PICKUP.value, reason)
+            self._flag_affected_parcel(failure, parcel_id)
             self.status = RequestStatus.FAILED_PICKUP
             self.failure_reason = reason # State Specific Failure Reason
             return False
@@ -356,6 +379,8 @@ class DeliveryRequest:
         assignment.end(when, status.value, reason)
         for parcel in self.parcels:
             parcel.status = ParcelStatus.DELIVERED if successful else ParcelStatus.RETURN_REQUIRED
+        if not successful:
+            self._flag_affected_parcel(failure, parcel_id)
         self.status = status
         if successful:
             self.completed_at, self.failure_reason = when, ""
@@ -371,6 +396,10 @@ class DeliveryRequest:
             raise DomainError("Retry requires the retained accepted quote.")
         if any(parcel.status != ParcelStatus.PENDING for parcel in self.parcels):
             raise DomainError("Retry requires every parcel to remain awaiting collection.")
+        # The failed attempt stays in the assignment history, so the parcel
+        # exceptions from that attempt are cleared for the new attempt.
+        for parcel in self.parcels:
+            parcel.clear_exception()
         if self.assignments:
             last = self.assignments[-1]
             if (not last.active and last.outcome == RequestStatus.FAILED_PICKUP.value

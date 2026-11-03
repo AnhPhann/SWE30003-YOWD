@@ -11,7 +11,7 @@ from yowd.models import (
     Parcel, PaymentRecord, RequestStatus, StaffList,
 )
 from yowd.serialization import decode_state, encode_state
-from yowd.storage import StorageError
+from yowd.storage import SCHEMA_VERSION, StorageError
 
 
 START = datetime(2026, 10, 22, 9)
@@ -117,7 +117,10 @@ class SerializationTests(unittest.TestCase):
                 self.assertEqual(encode_state(*decode_state(snapshot)), snapshot)
 
     def test_empty_graph_round_trips(self):
-        snapshot = {"schema_version": 3, "customers": [], "staff": [], "requests": []}
+        snapshot = {
+            "schema_version": SCHEMA_VERSION,
+            "customers": [], "staff": [], "requests": [],
+        }
         self.assertEqual(encode_state(*decode_state(snapshot)), snapshot)
 
     def test_version_three_round_trip_preserves_addresses_and_shared_history(self):
@@ -126,7 +129,7 @@ class SerializationTests(unittest.TestCase):
             request.pickup_address = "12 Swan Street"
             request.destination_address = "8 Hopkins Street"
         snapshot = encode_state(*graph)
-        self.assertEqual(snapshot["schema_version"], 3)
+        self.assertEqual(snapshot["schema_version"], SCHEMA_VERSION)
         self.assertEqual(snapshot["requests"][0]["pickup_address"], "12 Swan Street")
         self.assertEqual(snapshot["requests"][0]["destination_address"], "8 Hopkins Street")
         customers, _, requests = decode_state(snapshot)
@@ -159,7 +162,7 @@ class SerializationTests(unittest.TestCase):
                 self.assertEqual(getattr(request, "destination_address", None), "")
                 self.assertEqual(request.status, status)
                 migrated = encode_state(*graph)
-                self.assertEqual(migrated["schema_version"], 3)
+                self.assertEqual(migrated["schema_version"], SCHEMA_VERSION)
                 self.assertEqual(migrated["requests"][0]["pickup_address"], "")
                 self.assertEqual(migrated["requests"][0]["destination_address"], "")
                 comparable = deepcopy(migrated)
@@ -188,7 +191,7 @@ class SerializationTests(unittest.TestCase):
             self.assertEqual([getattr(a, "outcome_details", None) for a in request.assignments], ["", ""])
             self.assertEqual(request.payment.payment_id, f"PAY{request.request_id[1:]}")
         migrated = encode_state(customers, staff, requests)
-        self.assertEqual(migrated["schema_version"], 3)
+        self.assertEqual(migrated["schema_version"], SCHEMA_VERSION)
         comparable = deepcopy(migrated)
         comparable["schema_version"] = 2
         for row in comparable["requests"]:

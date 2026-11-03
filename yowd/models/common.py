@@ -52,6 +52,24 @@ class DeliveryFailure(str, Enum):
     PARCEL_DAMAGED = "Parcel damaged"
     OTHER = "Other"
 
+
+class ParcelException(str, Enum):
+    """Problems recorded against one parcel (A2 Parcel CRC)."""
+
+    MISSING = "Missing"
+    DAMAGED = "Damaged"
+    MISMATCH = "Does not match request"
+
+
+# Pickup and delivery failure reasons that concern one parcel, and the
+# exception each one records on that parcel. Both failure enumerations use
+# the same text for missing and damaged parcels.
+PARCEL_EXCEPTION_BY_FAILURE = {
+    "Parcel missing": ParcelException.MISSING,
+    "Parcel damaged": ParcelException.DAMAGED,
+    "Parcel does not match request": ParcelException.MISMATCH,
+}
+
 def require_text(value: str, label: str) -> str:
     """Return trimmed, nonempty text or a useful validation error."""
     if not isinstance(value, str) or not value.strip():
