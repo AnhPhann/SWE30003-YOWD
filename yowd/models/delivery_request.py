@@ -111,6 +111,38 @@ class DeliveryRequest:
         destination_address = require_text(destination_address, "Destination address")
         self.pickup_address, self.destination_address = pickup_address, destination_address
 
+    def tracking_info(self) -> dict:
+        """Return the tracking view of this request (A2 section 3.7).
+
+        It gives the status, the quoted pickup and delivery window, the
+        worker on the active assignment, and the worker on the latest
+        assignment. Ended assignments are counted separately so the
+        history stays distinguishable from the current allocation.
+        """
+        quoted_pickup = None
+        quoted_delivery = None
+        if self.quote is not None:
+            quoted_pickup = self.quote.pickup_at
+            quoted_delivery = self.quote.delivery_at
+        active_staff_id = None
+        if self.active_assignment is not None:
+            active_staff_id = self.active_assignment.staff_id
+        latest_staff_id = None
+        if self.assignments:
+            latest_staff_id = self.assignments[-1].staff_id
+        ended_assignments = 0
+        for assignment in self.assignments:
+            if not assignment.active:
+                ended_assignments += 1
+        return {
+            "status": self.status.value,
+            "quoted_pickup": quoted_pickup,
+            "quoted_delivery": quoted_delivery,
+            "active_staff_id": active_staff_id,
+            "latest_staff_id": latest_staff_id,
+            "ended_assignments": ended_assignments,
+        }
+
     @property
     def active_assignment(self) -> DeliveryAssignment | None:
         active = [assignment for assignment in self.assignments if assignment.active]

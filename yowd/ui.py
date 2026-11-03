@@ -567,14 +567,20 @@ class MainWindow:
         list_frame = ttk.Frame(panes)
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
-        columns = ("customer", "destination", "status", "quote_amount", "worker", "payment")
+        columns = (
+            "customer", "destination", "status", "delivery_due",
+            "quote_amount", "worker", "payment",
+        )
         self.request_tree = ttk.Treeview(
             list_frame, columns=columns, show="tree headings", selectmode="browse", height=8
         )
         self.request_tree.heading("#0", text="Request ID")
         self.request_tree.column("#0", width=130, minwidth=80)
-        headings = ("Customer", "Destination", "Status", "Quote ($)", "Worker", "Payment")
-        widths = (140, 180, 140, 85, 130, 130)
+        headings = (
+            "Customer", "Destination", "Status", "Delivery due",
+            "Quote ($)", "Worker", "Payment",
+        )
+        widths = (140, 150, 120, 130, 80, 150, 130)
         for key, heading, width in zip(columns, headings, widths):
             self.request_tree.heading(key, text=heading)
             self.request_tree.column(key, width=width, minwidth=60)

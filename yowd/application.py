@@ -572,10 +572,20 @@ class YowdApplication:
         counts: dict[str, int] = {}
         for request in self.requests.values():
             counts[request.status.value] = counts.get(request.status.value, 0) + 1
-            assignment = request.active_assignment
-            if assignment is None and request.assignments:
-                assignment = request.assignments[-1]
-            worker = self.staff_list.staff.get(assignment.staff_id) if assignment else None
+            # The list reads the request's own tracking view (A2 section 3.7).
+            tracking = request.tracking_info()
+            # The worker is the one on the latest assignment. "(ended)" marks
+            # a worker whose assignment has finished.
+            worker_text = ""
+            if tracking["latest_staff_id"] is not None:
+                worker = self.staff_list.staff.get(tracking["latest_staff_id"])
+                if worker is not None:
+                    worker_text = worker.name
+                if tracking["active_staff_id"] is None:
+                    worker_text += " (ended)"
+            delivery_due = ""
+            if tracking["quoted_delivery"] is not None:
+                delivery_due = f"{tracking['quoted_delivery']:%Y-%m-%d %H:%M}"
             rows.append({
                 "id": request.request_id,
                 "customer": request.customer.name,
@@ -585,7 +595,8 @@ class YowdApplication:
                 "destination_address": request.destination_address,
                 "status": request.status.value,
                 "quote_amount": str(request.quote.amount) if request.quote else "",
-                "worker": worker.name if worker else "",
+                "worker": worker_text,
+                "delivery_due": delivery_due,
                 "payment": (
                     "Authorised exception" if request.payment.exception and request.payment.allows_pickup
                     else "Exception awaiting authorisation" if request.payment.exception
