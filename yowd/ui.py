@@ -538,6 +538,7 @@ class MainWindow:
                 ("Allocate Worker", self._allocate),
                 ("Authorise Payment Exception", self._authorise),
                 ("Retry Pickup", self._retry_pickup),
+                ("Reject Request", self._reject_request),
             )),
             ("Delivery Staff", (
                 ("Record Pickup", self._pickup),
@@ -1212,6 +1213,29 @@ class MainWindow:
             "Return this failed-pickup request to Accepted for a new allocation? The previous assignment remains in its history.", parent=self.root,
         ):
             self._action(lambda: self.app.retry_pickup(request_id), "Pickup retry authorised; request awaits allocation.")
+
+    def _reject_request(self) -> None:
+        """Office action: reject the selected request with a reason."""
+        request_id = self._selected_request()
+        if request_id is None:
+            return
+
+        def save(values: dict[str, str]) -> None:
+            self.app.reject_request(request_id, values["reason"])
+            self.refresh()
+            self.status.set(f"Request {request_id} rejected.")
+
+        FormDialog(
+            self.root, "Reject delivery request",
+            [("reason", "Rejection reason", "")],
+            save,
+            explanation=(
+                "Use this when YOWD cannot fulfil the request. A request can "
+                "only be rejected before a quote is prepared. The reason is "
+                "kept with the request."
+            ),
+            button_text="Reject request",
+        )
 
     def _register_staff(self) -> None:
         def save(values: dict[str, str]) -> None:

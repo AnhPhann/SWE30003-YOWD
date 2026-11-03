@@ -520,6 +520,18 @@ class YowdApplication:
     def retry_pickup(self, request_id: str) -> None:
         self._change(lambda: self._request(request_id).retry_pickup())
 
+    def reject_request(self, request_id: str, reason: str) -> None:
+        """Record an office decision that YOWD cannot fulfil a request.
+
+        DeliveryRequest only allows this before a quote is issued, and the
+        reason is required. The reason is kept with the rejected request.
+        """
+        def reject() -> None:
+            request = self._request(request_id)
+            request.reject(reason)
+
+        self._change(reject)
+
     def statistics(
         self, start: date, end: date, staff_id: str | None = None,
     ) -> dict:
