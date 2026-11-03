@@ -185,3 +185,11 @@ Python source keeps its existing project-relative database. The frozen Windows a
 3. **Decision:** each worker row now includes `average_pickup_to_delivery_minutes`, worked out from that worker's completed deliveries in the period. Pickup to delivery is used because it is the part of the job the worker is responsible for. The summary adds the average to a worker's line only when that worker has at least one completed delivery. The overall averages are unchanged.
 4. **Affected code and checks:** `models/delivery_statistics.py`. Tests in `tests/test_statistics.py` cover two workers with different averages and a worker with only failed outcomes. The test helper now accepts how many minutes after pickup the outcome is recorded.
 5. **Limitation:** a worker with only failed outcomes shows no average, because a failed delivery has no completion time.
+
+## 18. Office rejection of a request
+
+1. **Responsibility:** A2 section 3.1 states that "a request that YOWD cannot fulfil becomes Rejected", and Scenario 1 (step 4) has DeliveryRequest record Rejected with the reason and stop without creating a quote.
+2. **Issue:** `DeliveryRequest.reject()` existed, but it was only called automatically when a suburb was outside the service area. Office staff had no way to reject a request for any other reason.
+3. **Decision:** `YowdApplication.reject_request()` calls `DeliveryRequest.reject()` and saves the result. The **Reject Request** button in the Office Staff row opens a form that needs a reason. The domain rules are unchanged: a request can only be rejected while it is Requested, before a quote is issued, and the reason is required. The reason is kept with the request and shown in its details. Rejected requests are not counted as completed or failed outcomes in statistics. No snapshot field was added.
+4. **Affected code and checks:** `application.py` and the Reject Request form in `ui.py`. Tests in `tests/test_request_rejection.py` cover a valid rejection, a blank reason, a quoted request, an unknown request, saving across a restart, statistics and the form.
+5. **Limitation:** a rejection cannot be undone. A customer whose request was rejected in error must lodge a new request.
