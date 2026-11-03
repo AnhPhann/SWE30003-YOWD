@@ -528,6 +528,7 @@ class MainWindow:
         groups = (
             ("Customer", (
                 ("New Request", lambda: NewRequestDialog(self)),
+                ("Edit Customer", self._edit_customer),
                 ("Edit Addresses", self._edit_addresses),
                 ("Accept Quote", lambda: self._respond(True)),
                 ("Decline Quote", lambda: self._respond(False)),
@@ -555,7 +556,7 @@ class MainWindow:
                     row=row, column=column, sticky="ew", padx=(0, 6), pady=(0, 6)
                 )
         # Button Columns Share Spare Width
-        for column in range(1, 5):
+        for column in range(1, 6):
             toolbar.columnconfigure(column, weight=1)
         ttk.Label(
             tab, text="Select a request to view its complete record or perform an action.",
@@ -867,6 +868,46 @@ class MainWindow:
             explanation=suggestion + "Suggested times consider request age, duration and current availability; they do not reserve a worker. Times are editable. Enter YYYY-MM-DD HH:MM.\n\n"
                         + tariff_note + "The quoted amount is calculated by the application.",
             button_text="Prepare Quote",
+        )
+
+    def _edit_customer(self) -> None:
+        """Edit the contact details of the selected request's customer."""
+        request_id = self._selected_request()
+        if request_id is None:
+            return
+        try:
+            details = self.app.customer_details(request_id)
+        except EXPECTED_ERRORS as error:
+            messagebox.showerror(
+                "Customer not available", str(error), parent=self.root,
+            )
+            return
+        # Each of the customer's requests is listed with its current status.
+        request_lines = []
+        for listed_request_id, status in details["requests"]:
+            request_lines.append(f"{listed_request_id} ({status})")
+
+        def save(values: dict[str, str]) -> None:
+            self.app.update_customer_contact(
+                details["customer_id"], values["name"], values["email"],
+                values["phone"],
+            )
+            self.refresh()
+            self.status.set(f"Contact details updated for {values['name']}.")
+
+        FormDialog(
+            self.root, "Edit customer contact details",
+            [
+                ("name", "Customer name", details["name"]),
+                ("email", "Email", details["email"]),
+                ("phone", "Phone", details["phone"]),
+            ],
+            save,
+            explanation=(
+                "Changes apply to every request of this customer. "
+                "Requests: " + ", ".join(request_lines)
+            ),
+            button_text="Save customer",
         )
 
     def _edit_addresses(self) -> None:

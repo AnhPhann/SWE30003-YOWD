@@ -35,7 +35,7 @@ from .operating_hours import (
     within_operating_hours,
 )
 from .pricing import SERVICE_ZONES, TariffPolicy, normalise_suburb
-from .models.common import DeliveryFailure, require_text
+from .models.common import DeliveryFailure, require_text, validate_contact
 from .models.delivery_statistics import REPORTING_PERIODS
 from .serialization import decode_state, encode_state
 from .storage import SQLiteStore
@@ -188,6 +188,49 @@ class YowdApplication:
         self._change(lambda: self._request(request_id).update_addresses(
             pickup_address, destination_address,
         ))
+
+    def customer_details(self, request_id: str) -> dict:
+        """Return the contact details and request statuses of a customer.
+
+        The customer is the one who owns the given request.
+        """
+        customer = self._request(request_id).customer
+        return {
+            "customer_id": customer.customer_id,
+            "name": customer.name,
+            "email": customer.email,
+            "phone": customer.phone,
+            "requests": customer.request_statuses(self.requests.values()),
+        }
+
+    def update_customer_contact(
+        self, customer_id: str, name: str, email: str, phone: str,
+    ) -> None:
+        """Change a customer's contact details for all of their requests.
+
+        The email must not belong to another customer, because new requests
+        are matched to existing customers by email.
+        """
+        def update() -> None:
+            customer = self.customers.get(customer_id)
+            if customer is None:
+                raise DomainError("Customer was not found.")
+            validated_name, validated_email, validated_phone = (
+                validate_contact(name, email, phone)
+            )
+            for other_customer in self.customers.values():
+                if other_customer is customer:
+                    continue
+                other_email = other_customer.email.casefold()
+                if other_email == validated_email.casefold():
+                    raise DomainError(
+                        "That email already belongs to another customer."
+                    )
+            customer.update_contact(
+                validated_name, validated_email, validated_phone,
+            )
+
+        self._change(update)
 
     def register_staff(
         self, name: str, email: str, phone: str,

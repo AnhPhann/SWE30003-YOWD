@@ -158,7 +158,13 @@ class DeliveryRequest:
 
     def respond_to_quote(self, customer_id: str, accepted: bool) -> None:
         self._require_status(RequestStatus.QUOTED)
-        if customer_id != self.customer.customer_id:
+        # The responder must be this request's customer, and the customer
+        # must list this request as one of theirs (A2 Customer CRC).
+        is_own_customer = (
+            customer_id == self.customer.customer_id
+            and self.customer.owns_request(self.request_id)
+        )
+        if not is_own_customer:
             raise DomainError("Only this request's customer can respond to its quote.")
         if self.quote is None:
             raise DomainError("The request has no current quote.")
