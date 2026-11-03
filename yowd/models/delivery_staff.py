@@ -1,10 +1,16 @@
 """Worker identity, employment status and delegated availability checks."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from .availability_schedule import AvailabilitySchedule
 from .common import DomainError, require_text, validate_contact, validate_window
+
+if TYPE_CHECKING:
+    from .delivery_assignment import DeliveryAssignment
+    from .delivery_request import DeliveryRequest
 
 
 @dataclass
@@ -29,6 +35,33 @@ class DeliveryStaff:
         self.assignment_ids = list(dict.fromkeys(
             require_text(value, "Assignment ID") for value in self.assignment_ids
         ))
+
+    def assignment_history(
+        self, requests: Iterable["DeliveryRequest"],
+    ) -> list[tuple["DeliveryRequest", "DeliveryAssignment"]]:
+        """Return this worker's assignments with the request each belongs to.
+
+        Only assignments listed in this worker's assignment IDs are
+        returned, in the order they were given. Active assignments are the
+        current ones; ended assignments are the history (A2 DeliveryStaff
+        CRC).
+        """
+        found_by_id = {}
+        for request in requests:
+            for assignment in request.assignments:
+                is_own_assignment = (
+                    assignment.staff_id == self.staff_id
+                    and assignment.assignment_id in self.assignment_ids
+                )
+                if is_own_assignment:
+                    found_by_id[assignment.assignment_id] = (
+                        request, assignment,
+                    )
+        history = []
+        for assignment_id in self.assignment_ids:
+            if assignment_id in found_by_id:
+                history.append(found_by_id[assignment_id])
+        return history
 
     def eligibility(self, start: datetime, end: datetime) -> tuple[bool, str]:
         """Assess current employment and schedule coverage, not workload overlap."""

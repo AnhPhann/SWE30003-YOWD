@@ -645,6 +645,30 @@ class MainWindow:
         scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.staff_tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
         self.staff_tree.configure(yscrollcommand=scroll.set)
+        self.staff_tree.bind(
+            "<<TreeviewSelect>>", self._show_staff_assignments,
+        )
+
+        # The selected worker's current and past assignments.
+        tab.rowconfigure(3, weight=1)
+        assignments_frame = ttk.LabelFrame(
+            tab, text="Selected worker's assignments", padding=10,
+        )
+        assignments_frame.grid(row=3, column=0, sticky="nsew", pady=(12, 0))
+        assignments_frame.columnconfigure(0, weight=1)
+        assignments_frame.rowconfigure(0, weight=1)
+        self.staff_details = tk.Text(
+            assignments_frame, wrap="word", height=8, state="disabled",
+            font=("Consolas", 10), relief="flat", background="#fafbfc",
+            padx=10, pady=8,
+        )
+        self.staff_details.grid(row=0, column=0, sticky="nsew")
+        details_scroll = ttk.Scrollbar(
+            assignments_frame, orient="vertical",
+            command=self.staff_details.yview,
+        )
+        details_scroll.grid(row=0, column=1, sticky="ns")
+        self.staff_details.configure(yscrollcommand=details_scroll.set)
 
     def _build_statistics(self) -> None:
         tab = ttk.Frame(self.notebook, padding=18)
@@ -776,6 +800,7 @@ class MainWindow:
         )
         self.storage.set("Local data: " + _display(snapshot.get("storage_path", "")))
         self._refresh_statistics_staff_choices()
+        self._show_staff_assignments()
         self._show_request()
 
     def _selected_request(self, required: bool = True) -> str | None:
@@ -793,6 +818,21 @@ class MainWindow:
         if required:
             messagebox.showinfo("Select staff", "Select a staff member first.", parent=self.root)
         return None
+
+    def _show_staff_assignments(self, _event: tk.Event | None = None) -> None:
+        """Show the selected worker's current and past assignments."""
+        staff_id = self._selected_staff(required=False)
+        if staff_id is None:
+            self._set_text(
+                self.staff_details,
+                "Select a worker to see their current and past assignments.",
+            )
+            return
+        try:
+            content = self.app.staff_assignment_details(staff_id)
+        except EXPECTED_ERRORS as error:
+            content = str(error)
+        self._set_text(self.staff_details, content)
 
     def _show_request(self) -> None:
         request_id = self._selected_request(required=False)

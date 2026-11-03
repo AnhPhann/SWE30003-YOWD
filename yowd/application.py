@@ -632,6 +632,49 @@ class YowdApplication:
             "storage_path": str(self.store.path),
         }
 
+    def staff_assignment_details(self, staff_id: str) -> str:
+        """Return a worker's current and past assignments as readable text."""
+        worker = self.staff_list.get(staff_id)
+        history = worker.assignment_history(self.requests.values())
+        current_lines = []
+        past_lines = []
+        for request, assignment in history:
+            line = (
+                f"  {assignment.assignment_id} | {request.request_id} "
+                f"({request.customer.name}) | request status: "
+                f"{request.status.value} | started "
+                f"{assignment.started_at:%Y-%m-%d %H:%M}"
+            )
+            if assignment.active:
+                current_lines.append(line)
+            else:
+                line += (
+                    f" | ended {assignment.ended_at:%Y-%m-%d %H:%M}"
+                    f" | outcome: {assignment.outcome}"
+                )
+                if assignment.outcome_details:
+                    line += f" | {assignment.outcome_details}"
+                past_lines.append(line)
+        if worker.active:
+            employment = "active"
+        else:
+            employment = "former"
+        lines = [
+            f"{worker.name} ({worker.staff_id}, {employment}): "
+            f"{len(current_lines)} current, "
+            f"{len(past_lines)} past assignments",
+            "",
+            "Current assignments:",
+        ]
+        if not current_lines:
+            lines.append("  None")
+        lines.extend(current_lines)
+        lines.extend(["", "Past assignments:"])
+        if not past_lines:
+            lines.append("  None")
+        lines.extend(past_lines)
+        return "\n".join(lines)
+
     def request_details(self, request_id: str) -> str:
         request = self._request(request_id)
         lines = [
