@@ -10,6 +10,7 @@ from yowd.models import (
     Customer, DeliveryQuote, DeliveryRequest, DeliveryStaff,
     DeliveryStatistics, DomainError, Parcel, PaymentRecord, StaffList,
 )
+from yowd.models.delivery_statistics import format_duration
 
 
 class ReportingPeriodTests(unittest.TestCase):
@@ -177,6 +178,17 @@ class StaffScopeTests(unittest.TestCase):
         self.assertEqual(result["average_pickup_to_delivery_minutes"], 0.0)
         self.assertEqual(len(result["staff_rows"]), 2)
 
+    def test_failure_rate_is_share_of_final_outcomes(self):
+        result = DeliveryStatistics.summarise(
+            self.three_outcomes(), self.roster,
+            self.now.date(), self.now.date(),
+        )
+        self.assertEqual(result["failure_rate_percent"], 33.3)
+        rates = {}
+        for row in result["staff_rows"]:
+            rates[row["name"]] = row["failure_rate_percent"]
+        self.assertEqual(rates, {"Alex Tran": 50.0, "Sam Lee": 0.0})
+
 
 class ApplicationStatisticsTests(unittest.TestCase):
     def setUp(self):
@@ -206,6 +218,74 @@ class ApplicationStatisticsTests(unittest.TestCase):
             self.app.statistics_staff_choices(),
             [(self.worker_id, "Alex Tran (former)")],
         )
+
+
+class FailureRateAndSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.result = {
+            "completed": 3, "failed": 1, "failure_rate_percent": 25.0,
+            "by_staff": {"S1": 3},
+            "average_minutes": 150.0,
+            "average_pickup_to_delivery_minutes": 45.0,
+            "staff_rows": [{
+                "staff_id": "S1", "name": "Alex Tran", "active": False,
+                "completed": 3, "failed": 1, "failure_rate_percent": 25.0,
+            }],
+        }
+        self.day = date(2026, 10, 22)
+
+    def test_no_outcomes_gives_zero_failure_rate(self):
+        result = DeliveryStatistics.summarise(
+            [], StaffList(), self.day, self.day,
+        )
+        self.assertEqual(result["failure_rate_percent"], 0.0)
+
+    def test_summary_lists_counts_rate_averages_and_workers(self):
+        lines = DeliveryStatistics.format_summary(
+            self.result, "Day", self.day, self.day, "All staff",
+        )
+        self.assertEqual(
+            lines[0], "Reporting period: Day, 2026-10-22 to 2026-10-22 "
+            "(inclusive)",
+        )
+        self.assertIn("Failure rate: 25.0% of final outcomes", lines)
+        self.assertIn("Average time from pickup to delivery: 45 min", lines)
+        self.assertIn(
+            "Average time from request lodgement to delivery: 2 h 30 min",
+            lines,
+        )
+        self.assertIn(
+            "  Alex Tran (former): 3 completed, 1 failed, "
+            "25.0% failure rate",
+            lines,
+        )
+
+    def test_empty_summary_omits_rate_and_averages(self):
+        result = DeliveryStatistics.summarise(
+            [], StaffList(), self.day, self.day,
+        )
+        lines = DeliveryStatistics.format_summary(
+            result, "Day", self.day, self.day, "All staff",
+        )
+        joined = "\n".join(lines)
+        self.assertNotIn("Failure rate", joined)
+        self.assertNotIn("Average", joined)
+        self.assertIn("No completed or failed deliveries", joined)
+        self.assertIn("No delivery staff are registered.", joined)
+
+    def test_duration_format(self):
+        self.assertEqual(format_duration(0), "0 min")
+        self.assertEqual(format_duration(90), "1 h 30 min")
+        self.assertEqual(format_duration(1440 + 120), "1 d 2 h")
+
+    def test_application_report_matches_formatted_summary(self):
+        app = YowdApplication(clock=DemoClock(datetime(2026, 10, 22, 9)))
+        self.addCleanup(app.close)
+        report = app.statistics_report(
+            self.day, self.day, None, "Day", "All staff",
+        )
+        self.assertTrue(report.startswith("Reporting period: Day"))
+        self.assertIn("Completed deliveries: 0", report)
 
 
 if __name__ == "__main__":

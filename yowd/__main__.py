@@ -36,7 +36,8 @@ def run_demo(app: YowdApplication, clock: DemoClock) -> None:
     print()
     print(app.request_details(request_id))
     today = app.requests[request_id].completed_at.date()
-    print("\nStatistics:", app.statistics(today, today))
+    print()
+    print(app.statistics_report(today, today, None, "Day", "All staff"))
 
 
 def main(argv: list[str] | None = None) -> int:

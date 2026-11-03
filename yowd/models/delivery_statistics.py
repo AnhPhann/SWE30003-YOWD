@@ -24,6 +24,34 @@ def _average(values: list[float]) -> float:
     return round(sum(values) / len(values), 2)
 
 
+def _failure_rate(completed: int, failed: int) -> float:
+    """Return failed outcomes as a percentage of all final outcomes.
+
+    Zero is returned when there are no final outcomes.
+    """
+    finished = completed + failed
+    if finished == 0:
+        return 0.0
+    return round(failed / finished * 100, 1)
+
+
+def format_duration(total_minutes: float) -> str:
+    """Return a duration as days, hours and minutes, e.g. '1 d 2 h 5 min'."""
+    whole_minutes = int(round(total_minutes))
+    minutes_per_day = 24 * 60
+    days, remaining_minutes = divmod(whole_minutes, minutes_per_day)
+    hours, minutes = divmod(remaining_minutes, 60)
+    parts = []
+    if days:
+        parts.append(f"{days} d")
+    if hours:
+        parts.append(f"{hours} h")
+    # Minutes are always shown when no larger unit was added.
+    if minutes or not parts:
+        parts.append(f"{minutes} min")
+    return " ".join(parts)
+
+
 class DeliveryStatistics:
     @staticmethod
     def period_range(period_name: str, day: date) -> tuple[date, date]:
@@ -139,13 +167,73 @@ class DeliveryStatistics:
                 "active": active,
                 "completed": worker_counts["completed"],
                 "failed": worker_counts["failed"],
+                "failure_rate_percent": _failure_rate(
+                    worker_counts["completed"], worker_counts["failed"],
+                ),
             })
 
         return {
             "completed": completed,
             "failed": failed,
+            "failure_rate_percent": _failure_rate(completed, failed),
             "by_staff": by_staff,
             "average_minutes": _average(lodgement_minutes),
             "average_pickup_to_delivery_minutes": _average(pickup_minutes),
             "staff_rows": staff_rows,
         }
+
+    @staticmethod
+    def format_summary(
+        result: dict, period_name: str, start: date, end: date,
+        scope_label: str,
+    ) -> list[str]:
+        """Return the lines of a statistics summary for business owners.
+
+        result is the dictionary returned by summarise(). Averages and the
+        failure rate are only shown when there are outcomes to measure.
+        """
+        completed = result["completed"]
+        failed = result["failed"]
+        lines = [
+            f"Reporting period: {period_name}, "
+            f"{start.isoformat()} to {end.isoformat()} (inclusive)",
+            f"Staff scope: {scope_label}",
+            "",
+            f"Completed deliveries: {completed}",
+            f"Failed outcomes: {failed}",
+        ]
+        if completed + failed > 0:
+            lines.append(
+                f"Failure rate: {result['failure_rate_percent']}% "
+                "of final outcomes"
+            )
+        if completed > 0:
+            pickup_average = format_duration(
+                result["average_pickup_to_delivery_minutes"],
+            )
+            lodgement_average = format_duration(result["average_minutes"])
+            lines.append(
+                f"Average time from pickup to delivery: {pickup_average}"
+            )
+            lines.append(
+                "Average time from request lodgement to delivery: "
+                f"{lodgement_average}"
+            )
+        lines.append("")
+        lines.append("Results by worker:")
+        if not result["staff_rows"]:
+            lines.append("  No delivery staff are registered.")
+        for row in result["staff_rows"]:
+            if row["active"]:
+                employment = "active"
+            else:
+                employment = "former"
+            lines.append(
+                f"  {row['name']} ({employment}): "
+                f"{row['completed']} completed, {row['failed']} failed, "
+                f"{row['failure_rate_percent']}% failure rate"
+            )
+        if completed == 0 and failed == 0:
+            lines.append("")
+            lines.append("No completed or failed deliveries in this period.")
+        return lines

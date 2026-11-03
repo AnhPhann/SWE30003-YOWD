@@ -20,23 +20,6 @@ CUSTOM_PERIOD = "Custom"
 ALL_STAFF_LABEL = "All staff"
 
 
-def _format_minutes(total_minutes: float) -> str:
-    """Return a duration as days, hours and minutes, e.g. '1 d 2 h 5 min'."""
-    whole_minutes = int(round(total_minutes))
-    minutes_per_day = 24 * 60
-    days, remaining_minutes = divmod(whole_minutes, minutes_per_day)
-    hours, minutes = divmod(remaining_minutes, 60)
-    parts = []
-    if days:
-        parts.append(f"{days} d")
-    if hours:
-        parts.append(f"{hours} h")
-    # Minutes are always shown when no larger unit was added.
-    if minutes or not parts:
-        parts.append(f"{minutes} min")
-    return " ".join(parts)
-
-
 def _parse_datetime(value: str) -> datetime:
     try:
         return datetime.strptime(value.strip(), DATE_FORMAT)
@@ -1258,57 +1241,17 @@ class MainWindow:
             end = _parse_date(self.statistics_end.get())
             staff_label = self.statistics_staff.get()
             staff_id = self.statistics_staff_options.get(staff_label)
-            result = self.app.statistics(start, end, staff_id)
+            period_name = self.statistics_period.get()
+            # The summary text is built by DeliveryStatistics.
+            report = self.app.statistics_report(
+                start, end, staff_id, period_name, staff_label,
+            )
         except EXPECTED_ERRORS as error:
             messagebox.showerror(
                 "Invalid reporting period", str(error), parent=self.root,
             )
             return
-        completed_count = result.get("completed", 0)
-        failed_count = result.get("failed", 0)
-        period_name = self.statistics_period.get()
-        lines = [
-            f"Reporting period: {period_name}, "
-            f"{start.isoformat()} to {end.isoformat()} (inclusive)",
-            f"Staff scope: {staff_label}",
-            "",
-            f"Completed deliveries: {completed_count}",
-            f"Failed outcomes: {failed_count}",
-        ]
-        # Averages are only shown when at least one delivery was completed.
-        if completed_count:
-            pickup_average = _format_minutes(
-                result.get("average_pickup_to_delivery_minutes", 0),
-            )
-            lodgement_average = _format_minutes(
-                result.get("average_minutes", 0),
-            )
-            lines.append(
-                f"Average time from pickup to delivery: {pickup_average}"
-            )
-            lines.append(
-                "Average time from request lodgement to delivery: "
-                f"{lodgement_average}"
-            )
-        lines.extend(["", "Results by worker:"])
-        staff_rows = result.get("staff_rows", [])
-        if not staff_rows:
-            lines.append("  No delivery staff are registered.")
-        for row in staff_rows:
-            if row.get("active"):
-                employment = "active"
-            else:
-                employment = "former"
-            completed_text = f"{row.get('completed', 0)} completed"
-            failed_text = f"{row.get('failed', 0)} failed"
-            lines.append(
-                f"  {row.get('name')} ({employment}): "
-                f"{completed_text}, {failed_text}"
-            )
-        if completed_count == 0 and failed_count == 0:
-            lines.append("")
-            lines.append("No completed or failed deliveries in this period.")
-        self._set_text(self.statistics_text, "\n".join(lines))
+        self._set_text(self.statistics_text, report)
         self.status.set("Statistics calculated from retained delivery outcomes.")
 
     def _seed_demo(self) -> None:

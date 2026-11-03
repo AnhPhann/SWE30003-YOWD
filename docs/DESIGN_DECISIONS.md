@@ -145,3 +145,11 @@ Keep this record consistent with implemented behaviour and test results.
 Request details distinguish the quoted estimates from the actual pickup time and show assignment start/end times and retained outcome details. Statistics count current final request outcomes in the selected period; the failed total is not a count of every historical failed pickup attempt.
 
 Python source keeps its existing project-relative database. The frozen Windows app uses a stable per-user LocalAppData location, independent of its extraction or working directory. Explicit `--db` overrides either default. A reproducible one-folder PyInstaller build includes the runtime and packages source separately from executable files in the same ZIP. User records and caches are excluded.
+
+## 13. Statistics failure rate and summary text
+
+1. **Responsibility:** the A2 DeliveryStatistics CRC card (section 5.8) gives the class two responsibilities that were not implemented: calculating failure rates, and formatting the results into a summary for the business owner.
+2. **Issue:** `summarise()` returned counts and averages only. The statistics screen built the summary text itself, and the `--demo` output printed the raw result dictionary.
+3. **Decision:** `summarise()` now also returns `failure_rate_percent`, overall and for each worker. It is failed outcomes as a percentage of completed plus failed outcomes in the period, rounded to one decimal place, and 0 when there are no outcomes. The new static method `DeliveryStatistics.format_summary()` builds the summary lines, and `format_duration()` shows averages in days, hours and minutes. `YowdApplication.statistics_report()` returns that text to the statistics screen and the `--demo` output, so both show the same summary. Existing result keys are unchanged.
+4. **Affected code and checks:** `models/delivery_statistics.py`, `application.py`, the statistics tab in `ui.py` and `__main__.py`. Tests in `tests/test_statistics.py` cover the overall and per-worker rate, the zero case, the summary lines, the empty summary and the duration format.
+5. **Limitation:** the rate uses each request's final outcome, as in section 12. A request that failed pickup and was later delivered counts as one completed delivery, not as a failure.

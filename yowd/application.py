@@ -485,6 +485,17 @@ class YowdApplication:
             self.requests.values(), self.staff_list, start, end, staff_id,
         )
 
+    def statistics_report(
+        self, start: date, end: date, staff_id: str | None,
+        period_name: str, scope_label: str,
+    ) -> str:
+        """Return the statistics summary text built by DeliveryStatistics."""
+        result = self.statistics(start, end, staff_id)
+        lines = DeliveryStatistics.format_summary(
+            result, period_name, start, end, scope_label,
+        )
+        return "\n".join(lines)
+
     @staticmethod
     def statistics_periods() -> tuple[str, ...]:
         """Return the named reporting periods for the statistics screen."""
