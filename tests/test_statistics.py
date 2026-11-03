@@ -74,11 +74,13 @@ class StaffScopeTests(unittest.TestCase):
             )
             self.roster.register(worker)
 
-    def finished_request(self, request_id, worker, successful=True):
+    def finished_request(
+        self, request_id, worker, successful=True, minutes_after_pickup=30,
+    ):
         """Build a request that is quoted, allocated, picked up and closed.
 
-        The request is lodged at 09:00, picked up at 10:00 and given its
-        delivery outcome at 10:30.
+        The request is lodged at 09:00 and picked up at 10:00. Its delivery
+        outcome is recorded minutes_after_pickup later, 10:30 by default.
         """
         parcel = Parcel(
             f"{request_id}-P1", "Books",
@@ -103,7 +105,7 @@ class StaffScopeTests(unittest.TestCase):
             Decimal("25"), Decimal("25"), pickup_time,
         )
         request.record_pickup(worker.staff_id, True, payment, pickup_time)
-        outcome_time = self.now + timedelta(hours=1, minutes=30)
+        outcome_time = pickup_time + timedelta(minutes=minutes_after_pickup)
         if successful:
             request.record_delivery(worker.staff_id, True, "", outcome_time)
         else:
@@ -178,6 +180,59 @@ class StaffScopeTests(unittest.TestCase):
         self.assertEqual(result["average_pickup_to_delivery_minutes"], 0.0)
         self.assertEqual(len(result["staff_rows"]), 2)
 
+    def test_each_worker_has_their_own_average_delivery_time(self):
+        requests = [
+            self.finished_request(
+                "R1", self.first_worker, minutes_after_pickup=30,
+            ),
+            self.finished_request(
+                "R2", self.first_worker, minutes_after_pickup=90,
+            ),
+            self.finished_request(
+                "R3", self.second_worker, minutes_after_pickup=20,
+            ),
+        ]
+        result = DeliveryStatistics.summarise(
+            requests, self.roster, self.now.date(), self.now.date(),
+        )
+        averages = {}
+        for row in result["staff_rows"]:
+            averages[row["name"]] = row["average_pickup_to_delivery_minutes"]
+        self.assertEqual(averages, {"Alex Tran": 60.0, "Sam Lee": 20.0})
+        self.assertEqual(
+            round(result["average_pickup_to_delivery_minutes"], 2), 46.67,
+        )
+
+    def test_worker_with_only_failures_has_no_average_shown(self):
+        requests = [
+            self.finished_request("R1", self.first_worker),
+            self.finished_request(
+                "R2", self.second_worker, successful=False,
+            ),
+        ]
+        result = DeliveryStatistics.summarise(
+            requests, self.roster, self.now.date(), self.now.date(),
+        )
+        rows_by_name = {}
+        for row in result["staff_rows"]:
+            rows_by_name[row["name"]] = row
+        failed_only = rows_by_name["Sam Lee"]
+        self.assertEqual(
+            failed_only["average_pickup_to_delivery_minutes"], 0.0,
+        )
+        lines = DeliveryStatistics.format_summary(
+            result, "Day", self.now.date(), self.now.date(), "All staff",
+        )
+        self.assertIn(
+            "  Alex Tran (active): 1 completed, 0 failed, 0.0% failure rate, "
+            "average pickup to delivery 30 min",
+            lines,
+        )
+        self.assertIn(
+            "  Sam Lee (active): 0 completed, 1 failed, 100.0% failure rate",
+            lines,
+        )
+
     def test_failure_rate_is_share_of_final_outcomes(self):
         result = DeliveryStatistics.summarise(
             self.three_outcomes(), self.roster,
@@ -230,6 +285,7 @@ class FailureRateAndSummaryTests(unittest.TestCase):
             "staff_rows": [{
                 "staff_id": "S1", "name": "Alex Tran", "active": False,
                 "completed": 3, "failed": 1, "failure_rate_percent": 25.0,
+                "average_pickup_to_delivery_minutes": 45.0,
             }],
         }
         self.day = date(2026, 10, 22)
@@ -256,7 +312,7 @@ class FailureRateAndSummaryTests(unittest.TestCase):
         )
         self.assertIn(
             "  Alex Tran (former): 3 completed, 1 failed, "
-            "25.0% failure rate",
+            "25.0% failure rate, average pickup to delivery 45 min",
             lines,
         )
 

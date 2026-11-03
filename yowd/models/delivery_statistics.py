@@ -35,6 +35,11 @@ def _failure_rate(completed: int, failed: int) -> float:
     return round(failed / finished * 100, 1)
 
 
+def _new_worker_counts() -> dict:
+    """Return empty per-worker totals: counts and pickup-to-delivery times."""
+    return {"completed": 0, "failed": 0, "pickup_minutes": []}
+
+
 def format_duration(total_minutes: float) -> str:
     """Return a duration as days, hours and minutes, e.g. '1 d 2 h 5 min'."""
     whole_minutes = int(round(total_minutes))
@@ -102,7 +107,7 @@ class DeliveryStatistics:
 
         counts = {}
         for reported_id in reported_ids:
-            counts[reported_id] = {"completed": 0, "failed": 0}
+            counts[reported_id] = _new_worker_counts()
         completed = 0
         failed = 0
         lodgement_minutes = []
@@ -136,20 +141,25 @@ class DeliveryStatistics:
                 lodgement_time = request.completed_at - request.created_at
                 pickup_time = request.completed_at - request.picked_up_at
                 lodgement_minutes.append(lodgement_time.total_seconds() / 60)
-                pickup_minutes.append(pickup_time.total_seconds() / 60)
+                delivery_minutes = pickup_time.total_seconds() / 60
+                pickup_minutes.append(delivery_minutes)
                 outcome = "completed"
             elif request.status in FAILED_STATUSES and last_assignment:
                 if not start <= last_assignment.ended_at.date() <= end:
                     continue
                 failed += 1
+                delivery_minutes = None
                 outcome = "failed"
             else:
                 continue
             if worker_id is None:
                 continue
             if worker_id not in counts:
-                counts[worker_id] = {"completed": 0, "failed": 0}
+                counts[worker_id] = _new_worker_counts()
             counts[worker_id][outcome] += 1
+            # A completed delivery also adds to the worker's own average.
+            if delivery_minutes is not None:
+                counts[worker_id]["pickup_minutes"].append(delivery_minutes)
 
         by_staff = {}
         staff_rows = []
@@ -169,6 +179,9 @@ class DeliveryStatistics:
                 "failed": worker_counts["failed"],
                 "failure_rate_percent": _failure_rate(
                     worker_counts["completed"], worker_counts["failed"],
+                ),
+                "average_pickup_to_delivery_minutes": _average(
+                    worker_counts["pickup_minutes"],
                 ),
             })
 
@@ -228,11 +241,18 @@ class DeliveryStatistics:
                 employment = "active"
             else:
                 employment = "former"
-            lines.append(
+            row_text = (
                 f"  {row['name']} ({employment}): "
                 f"{row['completed']} completed, {row['failed']} failed, "
                 f"{row['failure_rate_percent']}% failure rate"
             )
+            # The worker's average is only shown after a completed delivery.
+            if row["completed"] > 0:
+                worker_average = format_duration(
+                    row["average_pickup_to_delivery_minutes"],
+                )
+                row_text += f", average pickup to delivery {worker_average}"
+            lines.append(row_text)
         if completed == 0 and failed == 0:
             lines.append("")
             lines.append("No completed or failed deliveries in this period.")
