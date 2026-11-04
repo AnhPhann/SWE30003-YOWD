@@ -23,6 +23,26 @@ class RequestStatus(str, Enum):
     FAILED_DELIVERY = "Failed delivery"
 
 
+class RequestAction(str, Enum):
+    """Actions that can be taken on one delivery request.
+
+    Each value is the name of the action as end users see it.
+    """
+
+    EDIT_CUSTOMER = "Edit Customer"
+    EDIT_ADDRESSES = "Edit Addresses"
+    PREPARE_QUOTE = "Prepare Quote"
+    REJECT_REQUEST = "Reject Request"
+    ACCEPT_QUOTE = "Accept Quote"
+    DECLINE_QUOTE = "Decline Quote"
+    ALLOCATE_WORKER = "Allocate Worker"
+    AUTHORISE_PAYMENT = "Authorise Payment Exception"
+    RETRY_PICKUP = "Retry Pickup"
+    RECORD_PICKUP = "Record Pickup"
+    RECORD_DELIVERED = "Delivered"
+    RECORD_FAILED_DELIVERY = "Failed Delivery"
+
+
 class ParcelStatus(str, Enum):
     PENDING = "Pending"
     COLLECTED = "Collected"

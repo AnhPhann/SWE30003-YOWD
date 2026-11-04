@@ -1,7 +1,9 @@
 """The ten YOWD domain classes and their shared values."""
 
 from .availability_schedule import AvailabilitySchedule
-from .common import DomainError, ParcelStatus, QuoteDecision, RequestStatus
+from .common import (
+    DomainError, ParcelStatus, QuoteDecision, RequestAction, RequestStatus,
+)
 from .customer import Customer
 from .delivery_assignment import DeliveryAssignment
 from .delivery_quote import DeliveryQuote

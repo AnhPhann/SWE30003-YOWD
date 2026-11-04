@@ -22,6 +22,7 @@ from .models import (
     Parcel,
     PaymentRecord,
     QuoteDecision,
+    RequestAction,
     RequestStatus,
     StaffList,
 )
@@ -42,6 +43,22 @@ from .storage import SQLiteStore
 
 
 Result = TypeVar("Result")
+
+# The end user who takes each request action.
+ACTION_ROLES = {
+    RequestAction.EDIT_CUSTOMER: "Customer",
+    RequestAction.EDIT_ADDRESSES: "Customer",
+    RequestAction.ACCEPT_QUOTE: "Customer",
+    RequestAction.DECLINE_QUOTE: "Customer",
+    RequestAction.PREPARE_QUOTE: "Office Staff",
+    RequestAction.REJECT_REQUEST: "Office Staff",
+    RequestAction.ALLOCATE_WORKER: "Office Staff",
+    RequestAction.AUTHORISE_PAYMENT: "Office Staff",
+    RequestAction.RETRY_PICKUP: "Office Staff",
+    RequestAction.RECORD_PICKUP: "Delivery Staff",
+    RequestAction.RECORD_DELIVERED: "Delivery Staff",
+    RequestAction.RECORD_FAILED_DELIVERY: "Delivery Staff",
+}
 
 
 def _identifier(prefix: str) -> str:
@@ -674,6 +691,43 @@ class YowdApplication:
             lines.append("  None")
         lines.extend(past_lines)
         return "\n".join(lines)
+
+    def request_actions(self, request_id: str) -> dict:
+        """Return the allowed actions and the next step for one request.
+
+        The result holds "actions", the names of the actions the request
+        accepts now, and "next_step", one line saying who acts next and
+        which actions they can take.
+        """
+        request = self._request(request_id)
+        actions = request.available_actions()
+        action_names = []
+        for action in actions:
+            action_names.append(action.value)
+        # Editing customer or address details does not move a request on,
+        # so it is left out of the next step.
+        editing_actions = (
+            RequestAction.EDIT_CUSTOMER, RequestAction.EDIT_ADDRESSES,
+        )
+        next_actions = []
+        for action in actions:
+            if action not in editing_actions:
+                next_actions.append(action)
+        if not next_actions:
+            if request.status == RequestStatus.DELIVERED:
+                next_step = "Complete. No further actions are needed."
+            else:
+                next_step = (
+                    f"Closed ({request.status.value}). "
+                    "No further actions are possible."
+                )
+        else:
+            role = ACTION_ROLES[next_actions[0]]
+            names = []
+            for action in next_actions:
+                names.append(action.value)
+            next_step = f"Next step: {role} - {' or '.join(names)}."
+        return {"actions": action_names, "next_step": next_step}
 
     def request_details(self, request_id: str) -> str:
         request = self._request(request_id)

@@ -254,7 +254,11 @@ class DesktopIntegrationTests(unittest.TestCase):
         dialog = self.dialog()
         self.invoke(dialog, "Prepare Quote")
         before = dict(self.app.overview()["requests"][0])
-        self.invoke(self.root, "Edit Addresses")
+        # The button is greyed out after a quote, so the form is opened
+        # directly to check that it still refuses the change.
+        edit_button = self.window.action_buttons["Edit Addresses"]
+        self.assertTrue(edit_button.instate(["disabled"]))
+        self.window._edit_addresses()
         dialog = self.dialog()
         self.fill(dialog, pickup_address="Unpermitted change")
         self.invoke(dialog, "Save addresses")

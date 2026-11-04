@@ -5,7 +5,8 @@ from datetime import datetime
 
 from .common import (
     PARCEL_EXCEPTION_BY_FAILURE, DeliveryFailure, DomainError, ParcelStatus,
-    PickupFailure, QuoteDecision, RequestStatus, local_datetime, require_text,
+    PickupFailure, QuoteDecision, RequestAction, RequestStatus,
+    local_datetime, require_text,
 )
 from .customer import Customer
 from .delivery_assignment import DeliveryAssignment
@@ -149,6 +150,43 @@ class DeliveryRequest:
             "latest_staff_id": latest_staff_id,
             "ended_assignments": ended_assignments,
         }
+
+    def available_actions(self) -> list[RequestAction]:
+        """Return the actions this request accepts in its current state.
+
+        The actions are returned in the order they happen in a delivery.
+        Customer contact details can be edited at any time. A payment
+        exception that has not been authorised blocks the next pickup or
+        delivery report until Office Staff authorise it.
+        """
+        actions = [RequestAction.EDIT_CUSTOMER]
+        payment_blocked = False
+        if self.payment is not None:
+            if not self.payment.allows_pickup:
+                payment_blocked = True
+        if self.status == RequestStatus.REQUESTED:
+            actions.append(RequestAction.EDIT_ADDRESSES)
+            actions.append(RequestAction.PREPARE_QUOTE)
+            actions.append(RequestAction.REJECT_REQUEST)
+        elif self.status == RequestStatus.QUOTED:
+            actions.append(RequestAction.ACCEPT_QUOTE)
+            actions.append(RequestAction.DECLINE_QUOTE)
+        elif self.status == RequestStatus.ACCEPTED:
+            actions.append(RequestAction.ALLOCATE_WORKER)
+        elif self.status == RequestStatus.FAILED_PICKUP:
+            actions.append(RequestAction.RETRY_PICKUP)
+        elif self.status == RequestStatus.ALLOCATED:
+            if payment_blocked:
+                actions.append(RequestAction.AUTHORISE_PAYMENT)
+            else:
+                actions.append(RequestAction.RECORD_PICKUP)
+        elif self.status == RequestStatus.PICKED_UP:
+            if payment_blocked:
+                actions.append(RequestAction.AUTHORISE_PAYMENT)
+            else:
+                actions.append(RequestAction.RECORD_DELIVERED)
+                actions.append(RequestAction.RECORD_FAILED_DELIVERY)
+        return actions
 
     @property
     def active_assignment(self) -> DeliveryAssignment | None:

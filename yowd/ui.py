@@ -18,6 +18,7 @@ DATE_FORMAT = "%Y-%m-%d %H:%M"
 EXPECTED_ERRORS = (ValueError, RuntimeError, OSError)
 CUSTOM_PERIOD = "Custom"
 ALL_STAFF_LABEL = "All staff"
+NO_REQUEST_STEP = "Select a request, or press New Request to start one."
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -481,6 +482,10 @@ class MainWindow:
         style.configure("Section.TLabel", font=("Segoe UI", 11, "bold"))
         style.configure("Muted.TLabel", foreground="#52616f")
         style.configure("TLabelframe.Label", font=("Segoe UI", 10, "bold"))
+        style.configure(
+            "NextStep.TLabel", font=("Segoe UI", 10, "bold"),
+            foreground="#1f4e79",
+        )
         root.columnconfigure(0, weight=1)
         root.rowconfigure(1, weight=1)
         header = ttk.Frame(root, padding=(20, 15, 20, 12))
@@ -552,6 +557,9 @@ class MainWindow:
         buttons_per_row = 2
         # Maps each role name to the box that holds its buttons.
         self.action_rows = {}
+        # Maps each button label to its button, so buttons can be greyed
+        # out when they do not apply to the selected request.
+        self.action_buttons = {}
         column = 0
         for role, actions in groups:
             # The role columns share any spare width.
@@ -570,17 +578,20 @@ class MainWindow:
                 )
             position = 0
             for label, callback in actions:
-                ttk.Button(role_box, text=label, command=callback).grid(
+                button = ttk.Button(role_box, text=label, command=callback)
+                button.grid(
                     row=position // buttons_per_row,
                     column=position % buttons_per_row,
                     sticky="ew", padx=3, pady=3,
                 )
+                self.action_buttons[label] = button
                 position += 1
             self.action_rows[role] = role_box
             column += 1
+        # One line saying who acts next on the selected request.
+        self.next_step = tk.StringVar(value=NO_REQUEST_STEP)
         ttk.Label(
-            tab, text="Select a request to view its complete record or perform an action.",
-            style="Muted.TLabel",
+            tab, textvariable=self.next_step, style="NextStep.TLabel",
         ).grid(row=1, column=0, sticky="w", pady=(0, 8))
         panes = ttk.Panedwindow(tab, orient="vertical")
         panes.grid(row=2, column=0, sticky="nsew")
@@ -855,6 +866,7 @@ class MainWindow:
 
     def _show_request(self) -> None:
         request_id = self._selected_request(required=False)
+        self._update_action_buttons(request_id)
         if request_id is None:
             self._set_text(self.details, "No request selected. Use New request to start a delivery transaction.")
             return
@@ -863,6 +875,28 @@ class MainWindow:
         except EXPECTED_ERRORS as error:
             content = str(error)
         self._set_text(self.details, content)
+
+    def _update_action_buttons(self, request_id: str | None) -> None:
+        """Grey out buttons that do not apply to the selected request.
+
+        New Request is always available. With no request selected, every
+        other button is greyed out.
+        """
+        allowed_labels = ["New Request"]
+        next_step = NO_REQUEST_STEP
+        if request_id is not None:
+            try:
+                result = self.app.request_actions(request_id)
+            except EXPECTED_ERRORS as error:
+                result = {"actions": [], "next_step": str(error)}
+            allowed_labels.extend(result["actions"])
+            next_step = result["next_step"]
+        for label, button in self.action_buttons.items():
+            if label in allowed_labels:
+                button.state(["!disabled"])
+            else:
+                button.state(["disabled"])
+        self.next_step.set(next_step)
 
     def _action(self, action: Callable[[], Any], success: str) -> None:
         try:
