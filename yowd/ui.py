@@ -19,6 +19,35 @@ EXPECTED_ERRORS = (ValueError, RuntimeError, OSError)
 CUSTOM_PERIOD = "Custom"
 ALL_STAFF_LABEL = "All staff"
 NO_REQUEST_STEP = "Select a request, or press New Request to start one."
+# Row colour for each request status (A1 section 7.2). Pale colours keep
+# the dark row text readable. Failed requests share red and closed
+# requests share grey.
+STATUS_COLOURS = {
+    "Requested": "#dbeafe",
+    "Quoted": "#ede4f7",
+    "Accepted": "#d5f0ec",
+    "Allocated": "#fdf0cc",
+    "Picked Up": "#fde2c8",
+    "Delivered": "#d6efd6",
+    "Failed pickup": "#f8d4d4",
+    "Failed delivery": "#f8d4d4",
+    "Rejected": "#e6e6e6",
+    "Quote declined": "#e6e6e6",
+}
+# Tag that marks the selected row in the requests table.
+SELECTED_ROW_TAG = "selected_row"
+# Legend entries in workflow order. Statuses that share a colour share one
+# entry.
+STATUS_LEGEND = (
+    ("Requested", "Requested"),
+    ("Quoted", "Quoted"),
+    ("Accepted", "Accepted"),
+    ("Allocated", "Allocated"),
+    ("Picked Up", "Picked Up"),
+    ("Delivered", "Delivered"),
+    ("Failed pickup", "Failed"),
+    ("Rejected", "Rejected or declined"),
+)
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -491,6 +520,9 @@ class MainWindow:
             bordercolor=[("disabled", "#d0cec9")],
         )
         style.configure("Treeview", rowheight=30)
+        # In the requests table, a selected row keeps its status colour and
+        # is marked with bold text instead (see _mark_selected_request).
+        style.map("Requests.Treeview", background=[], foreground=[])
         style.configure("Treeview.Heading", padding=(8, 8))
         style.configure("Title.TLabel", font=("Segoe UI", 21, "bold"))
         style.configure("Section.TLabel", font=("Segoe UI", 11, "bold"))
@@ -630,6 +662,7 @@ class MainWindow:
         self.request_tree = ttk.Treeview(
             list_frame, columns=columns, show="tree headings", selectmode="browse", height=8
         )
+        self.request_tree.configure(style="Requests.Treeview")
         self.request_tree.heading("#0", text="Request ID")
         self.request_tree.column("#0", width=130, minwidth=80)
         headings = (
@@ -647,6 +680,31 @@ class MainWindow:
         horizontal.grid(row=1, column=0, sticky="ew")
         self.request_tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
         self.request_tree.bind("<<TreeviewSelect>>", lambda _event: self._show_request())
+        # Each status has a tag that sets its row colour.
+        for status, colour in STATUS_COLOURS.items():
+            self.request_tree.tag_configure(status, background=colour)
+        # The selected row keeps its status colour and gets bold text.
+        self.request_tree.tag_configure(
+            SELECTED_ROW_TAG, foreground="#1f4e79",
+            font=("Segoe UI", 10, "bold"),
+        )
+        # Clicking empty space in the table or pressing Escape clears the
+        # selection.
+        self.request_tree.bind(
+            "<Button-1>", self._click_request_table, add=True,
+        )
+        self.request_tree.bind("<Escape>", self._clear_request_selection)
+        legend = ttk.Frame(list_frame)
+        legend.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Label(legend, text="Status colours:", style="Muted.TLabel").pack(
+            side="left", padx=(0, 8),
+        )
+        for status, legend_text in STATUS_LEGEND:
+            tk.Label(
+                legend, text=legend_text, background=STATUS_COLOURS[status],
+                foreground="#1f2d3a", padx=8, pady=2,
+                relief="solid", borderwidth=1,
+            ).pack(side="left", padx=(0, 6))
         panes.add(list_frame, weight=3)
         details_frame = ttk.LabelFrame(panes, text="Selected request", padding=10)
         details_frame.columnconfigure(0, weight=1)
@@ -831,6 +889,7 @@ class MainWindow:
             self.request_tree.insert(
                 "", "end", iid=identifier, text=identifier,
                 values=tuple(_display(row.get(key)) for key in self.request_tree["columns"]),
+                tags=(_display(row.get("status")),),
             )
         self.staff_tree.delete(*self.staff_tree.get_children())
         for identifier, row in self.staff_rows.items():
@@ -891,6 +950,7 @@ class MainWindow:
 
     def _show_request(self) -> None:
         request_id = self._selected_request(required=False)
+        self._mark_selected_request(request_id)
         self._update_action_buttons(request_id)
         if request_id is None:
             self._set_text(self.details, "No request selected. Use New request to start a delivery transaction.")
@@ -900,6 +960,27 @@ class MainWindow:
         except EXPECTED_ERRORS as error:
             content = str(error)
         self._set_text(self.details, content)
+
+    def _mark_selected_request(self, request_id: str | None) -> None:
+        """Give the selected row bold text and keep every status colour."""
+        for row_id in self.request_tree.get_children():
+            status = _display(self.request_rows[row_id].get("status"))
+            if row_id == request_id:
+                self.request_tree.item(
+                    row_id, tags=(status, SELECTED_ROW_TAG),
+                )
+            else:
+                self.request_tree.item(row_id, tags=(status,))
+
+    def _click_request_table(self, event: tk.Event) -> None:
+        """Clear the selection when empty space in the table is clicked."""
+        if self.request_tree.identify_row(event.y) == "":
+            self._clear_request_selection()
+
+    def _clear_request_selection(self, event: tk.Event | None = None) -> None:
+        """Remove the request selection and update the buttons and details."""
+        self.request_tree.selection_remove(self.request_tree.selection())
+        self._show_request()
 
     def _update_action_buttons(self, request_id: str | None) -> None:
         """Grey out buttons that do not apply to the selected request.
