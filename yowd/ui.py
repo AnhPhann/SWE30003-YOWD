@@ -19,6 +19,9 @@ EXPECTED_ERRORS = (ValueError, RuntimeError, OSError)
 CUSTOM_PERIOD = "Custom"
 ALL_STAFF_LABEL = "All staff"
 NO_REQUEST_STEP = "Select a request, or press New Request to start one."
+# Added to the label of every required field in the New Request form
+# (A1 section 7.2).
+REQUIRED_MARK = " *"
 # Row colour for each request status (A1 section 7.2). Pale colours keep
 # the dark row text readable. Failed requests share red and closed
 # requests share grey.
@@ -329,6 +332,9 @@ class NewRequestDialog(tk.Toplevel):
         ttk.Label(body, text="Customer and Delivery", style="Section.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 12)
         )
+        ttk.Label(
+            body, text="* Required field", style="Muted.TLabel",
+        ).grid(row=0, column=1, sticky="e", pady=(0, 12))
         fields = (
             ("customer_name", "Customer name"),
             ("email", "Email"),
@@ -339,7 +345,11 @@ class NewRequestDialog(tk.Toplevel):
             ("destination", "Destination suburb"),
         )
         for row, (key, label) in enumerate(fields, start=1):
-            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=3)
+            # Every customer and delivery field is required.
+            required_label = label + REQUIRED_MARK
+            ttk.Label(body, text=required_label).grid(
+                row=row, column=0, sticky="w", pady=3,
+            )
             variable = tk.StringVar(self)
             self.customer_variables[key] = variable
             ttk.Entry(body, textvariable=variable).grid(
@@ -354,7 +364,9 @@ class NewRequestDialog(tk.Toplevel):
         editor.grid(row=parcel_row + 1, column=0, columnspan=2, sticky="ew")
         for column, (key, label) in enumerate(self.PARCEL_FIELDS):
             editor.columnconfigure(column, weight=3 if column == 0 else 1)
-            ttk.Label(editor, text=label).grid(
+            # Every parcel field is required.
+            required_label = label + REQUIRED_MARK
+            ttk.Label(editor, text=required_label).grid(
                 row=0, column=column, sticky="w", padx=(0, 8)
             )
             variable = tk.StringVar(self)
