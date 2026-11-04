@@ -318,7 +318,8 @@ class DesktopIntegrationTests(unittest.TestCase):
         self.assertFalse(self.app.overview()["requests"])
         self.confirm.return_value = True
         self.window._seed_demo()
-        self.assertEqual(len(self.window.request_tree.get_children()), 1)
+        # The button loads three sample customers with one request each.
+        self.assertEqual(len(self.window.request_tree.get_children()), 3)
         self.assertEqual(len(self.window.staff_tree.get_children()), 1)
         self.assertIn("Sample data loaded", self.window.status.get())
 

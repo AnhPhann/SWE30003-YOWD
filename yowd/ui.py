@@ -1568,7 +1568,7 @@ class MainWindow:
             "Load Sample Data",
             "Load clearly labelled sample customers, requests and staff into this local database? This is allowed only when the database is empty.", parent=self.root,
         ):
-            self._action(self.app.seed_demo, "Sample data loaded. These records are for demonstration.")
+            self._action(self.app.load_sample_data, "Sample data loaded. These records are for demonstration.")
 
 
 def launch(app: Any) -> None:

@@ -241,3 +241,11 @@ Python source keeps its existing project-relative database. The frozen Windows a
 3. **Decision:** every customer, address and parcel field on the New Request form now has an asterisk after its label, and a "* Required field" note sits at the top of the form. All twelve fields are required by the existing validation, so every field is marked. The validation itself is unchanged.
 4. **Affected code and checks:** the New Request form in `ui.py`. Tests in `tests/test_required_fields.py` check that each of the twelve labels has an asterisk and that the note is shown.
 5. **Limitation:** only the New Request form is marked, as A1 asks. Other forms, such as Edit Customer, do not show asterisks, although their fields are also checked when saved. Invalid fields are not outlined in red; the form shows an error message instead.
+
+## 25. More sample customers for testing
+
+1. **Responsibility:** the Load Sample Data button gives a ready set of records for trying and demonstrating the four business areas without typing them in.
+2. **Issue:** the sample data held one customer with one request. After taking that request through to delivery, testing another path meant typing a new customer, addresses and parcels by hand, or starting with an empty database again.
+3. **Decision:** `YowdApplication.load_sample_data()` loads the existing `seed_demo()` data, then adds two more sample customers, each with one Requested request in a different part of the service area. The Load Sample Data button now uses this method. `seed_demo()` is unchanged, because many tests rely on it holding exactly one request. Like `seed_demo()`, the full set can only be loaded into an empty application.
+4. **Affected code and checks:** `application.py` and the Load Sample Data button in `ui.py`. Tests in `tests/test_sample_data.py` cover the three customers and requests, their starting status, quoting each request, saving across a restart and refusing a second load. One test in `tests/test_ui.py` now expects three sample requests instead of one.
+5. **Limitation:** the extra customers are added in a second save after `seed_demo()`. If that second save failed, the first sample customer would stay loaded without the other two.

@@ -44,6 +44,23 @@ from .storage import SQLiteStore
 
 Result = TypeVar("Result")
 
+# Extra sample customers added by load_sample_data(). Each entry holds the
+# customer's name, email and phone, the pickup and destination suburbs and
+# street addresses, and one parcel's description, weight in kg, and length,
+# width and height in cm.
+EXTRA_SAMPLE_CUSTOMERS = (
+    (
+        "Sample Customer Two", "customer.two@example.com", "0400000003",
+        "Hawthorn", "Carlton", "45 Glenferrie Road", "120 Lygon Street",
+        ("Laptop", "3", "40", "30", "10"),
+    ),
+    (
+        "Sample Customer Three", "customer.three@example.com", "0400000004",
+        "St Kilda", "Brunswick", "9 Acland Street", "300 Sydney Road",
+        ("Kitchenware", "5", "50", "40", "30"),
+    ),
+)
+
 # The end user who takes each request action.
 ACTION_ROLES = {
     RequestAction.EDIT_CUSTOMER: "Customer",
@@ -804,6 +821,38 @@ class YowdApplication:
         if request.completed_at:
             lines.append(f"Completed: {request.completed_at:%Y-%m-%d %H:%M}")
         return "\n".join(lines)
+
+    def load_sample_data(self) -> None:
+        """Load the full sample data set used by the Load Sample Data button.
+
+        This loads seed_demo() first, then adds the customers in
+        EXTRA_SAMPLE_CUSTOMERS with one Requested request each, so several
+        requests can be tried without entering new customers. Like
+        seed_demo(), it is allowed only into an empty application.
+        """
+        self.seed_demo()
+
+        def add_customers() -> None:
+            now = self._clock()
+            for sample in EXTRA_SAMPLE_CUSTOMERS:
+                name, email, phone = sample[0], sample[1], sample[2]
+                pickup, destination = sample[3], sample[4]
+                pickup_address, destination_address = sample[5], sample[6]
+                description, weight, length, width, height = sample[7]
+                customer = Customer(_identifier("CUS"), name, email, phone)
+                parcel = Parcel(
+                    _identifier("PAR"), description, Decimal(weight),
+                    Decimal(length), Decimal(width), Decimal(height),
+                )
+                request = DeliveryRequest(
+                    _identifier("REQ"), customer, pickup, destination,
+                    [parcel], now, pickup_address=pickup_address,
+                    destination_address=destination_address,
+                )
+                self.customers[customer.customer_id] = customer
+                self.requests[request.request_id] = request
+
+        self._change(add_customers)
 
     def seed_demo(self) -> None:
         """Explicit sample loading is allowed only into a completely empty store."""
