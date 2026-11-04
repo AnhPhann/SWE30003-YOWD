@@ -480,6 +480,7 @@ class MainWindow:
         style.configure("Title.TLabel", font=("Segoe UI", 21, "bold"))
         style.configure("Section.TLabel", font=("Segoe UI", 11, "bold"))
         style.configure("Muted.TLabel", foreground="#52616f")
+        style.configure("TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         root.columnconfigure(0, weight=1)
         root.rowconfigure(1, weight=1)
         header = ttk.Frame(root, padding=(20, 15, 20, 12))
@@ -524,41 +525,59 @@ class MainWindow:
         tab.rowconfigure(2, weight=1)
         toolbar = ttk.Frame(tab)
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        # Group Buttons Based on End User Type
+        # Each role has its own column. Within a role, buttons follow the
+        # order the actions happen in a delivery, reading left to right and
+        # then top to bottom.
         groups = (
             ("Customer", (
-                ("New Request", lambda: NewRequestDialog(self)),
+                ("New Request", self._new_request),
                 ("Edit Customer", self._edit_customer),
                 ("Edit Addresses", self._edit_addresses),
-                ("Accept Quote", lambda: self._respond(True)),
-                ("Decline Quote", lambda: self._respond(False)),
+                ("Accept Quote", self._accept_quote),
+                ("Decline Quote", self._decline_quote),
             )),
             ("Office Staff", (
                 ("Prepare Quote", self._quote),
+                ("Reject Request", self._reject_request),
                 ("Allocate Worker", self._allocate),
                 ("Authorise Payment Exception", self._authorise),
                 ("Retry Pickup", self._retry_pickup),
-                ("Reject Request", self._reject_request),
             )),
             ("Delivery Staff", (
                 ("Record Pickup", self._pickup),
-                ("Delivered", lambda: self._delivery(True)),
-                ("Failed Delivery", lambda: self._delivery(False)),
+                ("Delivered", self._record_delivered),
+                ("Failed Delivery", self._record_failed),
             )),
         )
-        for row, (role, actions) in enumerate(groups):
-
-            # Role Name in the First Column, Its Buttons Beside It
-            ttk.Label(toolbar, text=role, style="Section.TLabel").grid(
-                row=row, column=0, sticky="w", padx=(0, 12), pady=(0, 6)
-            )
-            for column, (label, callback) in enumerate(actions, start=1):
-                ttk.Button(toolbar, text=label, command=callback).grid(
-                    row=row, column=column, sticky="ew", padx=(0, 6), pady=(0, 6)
-                )
-        # Button Columns Share Spare Width
-        for column in range(1, 6):
+        buttons_per_row = 2
+        # Maps each role name to the box that holds its buttons.
+        self.action_rows = {}
+        column = 0
+        for role, actions in groups:
+            # The role columns share any spare width.
             toolbar.columnconfigure(column, weight=1)
+            role_box = ttk.LabelFrame(toolbar, text=role, padding=(10, 6))
+            # A gap separates each role column from the next one.
+            right_gap = 8
+            if column == len(groups) - 1:
+                right_gap = 0
+            role_box.grid(
+                row=0, column=column, sticky="nsew", padx=(0, right_gap),
+            )
+            for button_column in range(buttons_per_row):
+                role_box.columnconfigure(
+                    button_column, weight=1, uniform="button",
+                )
+            position = 0
+            for label, callback in actions:
+                ttk.Button(role_box, text=label, command=callback).grid(
+                    row=position // buttons_per_row,
+                    column=position % buttons_per_row,
+                    sticky="ew", padx=3, pady=3,
+                )
+                position += 1
+            self.action_rows[role] = role_box
+            column += 1
         ttk.Label(
             tab, text="Select a request to view its complete record or perform an action.",
             style="Muted.TLabel",
@@ -916,6 +935,21 @@ class MainWindow:
                         + tariff_note + "The quoted amount is calculated by the application.",
             button_text="Prepare Quote",
         )
+
+    def _new_request(self) -> None:
+        NewRequestDialog(self)
+
+    def _accept_quote(self) -> None:
+        self._respond(True)
+
+    def _decline_quote(self) -> None:
+        self._respond(False)
+
+    def _record_delivered(self) -> None:
+        self._delivery(True)
+
+    def _record_failed(self) -> None:
+        self._delivery(False)
 
     def _edit_customer(self) -> None:
         """Edit the contact details of the selected request's customer."""
