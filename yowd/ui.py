@@ -475,7 +475,21 @@ class MainWindow:
         style = ttk.Style(root)
         if "clam" in style.theme_names():
             style.theme_use("clam")
-        style.configure("TButton", padding=(10, 7))
+        # Every button that can be pressed is white with a blue-grey border.
+        # Greyed-out buttons are flat with faded text.
+        style.configure(
+            "TButton", padding=(10, 7), background="#ffffff",
+            foreground="#1f2d3a", bordercolor="#8aa4bd",
+        )
+        style.map(
+            "TButton",
+            background=[
+                ("disabled", "#e4e2de"), ("pressed", "#dfe8f1"),
+                ("active", "#f0f5fa"),
+            ],
+            foreground=[("disabled", "#a3a3a3")],
+            bordercolor=[("disabled", "#d0cec9")],
+        )
         style.configure("Treeview", rowheight=30)
         style.configure("Treeview.Heading", padding=(8, 8))
         style.configure("Title.TLabel", font=("Segoe UI", 21, "bold"))
@@ -485,21 +499,6 @@ class MainWindow:
         style.configure(
             "NextStep.TLabel", font=("Segoe UI", 10, "bold"),
             foreground="#1f4e79",
-        )
-        # Request action buttons that can be pressed are white with a
-        # blue-grey border. Greyed-out buttons are flat with faded text.
-        style.configure(
-            "Action.TButton", background="#ffffff", foreground="#1f2d3a",
-            bordercolor="#8aa4bd",
-        )
-        style.map(
-            "Action.TButton",
-            background=[
-                ("disabled", "#e4e2de"), ("pressed", "#dfe8f1"),
-                ("active", "#f0f5fa"),
-            ],
-            foreground=[("disabled", "#a3a3a3")],
-            bordercolor=[("disabled", "#d0cec9")],
         )
         # Buttons for the next step have a pale blue fill and bold text in
         # the same blue as the next-step line.
@@ -933,7 +932,7 @@ class MainWindow:
             if label in highlighted_labels:
                 button.configure(style="Next.TButton")
             else:
-                button.configure(style="Action.TButton")
+                button.configure(style="TButton")
         self.next_step.set(next_step)
 
     def _action(self, action: Callable[[], Any], success: str) -> None:

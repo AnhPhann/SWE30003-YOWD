@@ -195,13 +195,13 @@ class ActionButtonStateTests(unittest.TestCase):
             self.highlighted_labels(), ["Prepare Quote", "Reject Request"],
         )
 
-    def test_other_buttons_use_the_action_style(self):
+    def test_other_buttons_use_the_standard_style(self):
         self.window.request_tree.selection_set(self.request_id)
         self.window._show_request()
         for label in ("Edit Customer", "Allocate Worker"):
             with self.subTest(label=label):
                 button = self.window.action_buttons[label]
-                self.assertEqual(str(button.cget("style")), "Action.TButton")
+                self.assertEqual(str(button.cget("style")), "TButton")
 
     def test_buttons_follow_the_request_after_an_action(self):
         self.app.prepare_quote(self.request_id)
