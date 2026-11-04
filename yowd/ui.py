@@ -486,6 +486,32 @@ class MainWindow:
             "NextStep.TLabel", font=("Segoe UI", 10, "bold"),
             foreground="#1f4e79",
         )
+        # Request action buttons that can be pressed are white with a
+        # blue-grey border. Greyed-out buttons are flat with faded text.
+        style.configure(
+            "Action.TButton", background="#ffffff", foreground="#1f2d3a",
+            bordercolor="#8aa4bd",
+        )
+        style.map(
+            "Action.TButton",
+            background=[
+                ("disabled", "#e4e2de"), ("pressed", "#dfe8f1"),
+                ("active", "#f0f5fa"),
+            ],
+            foreground=[("disabled", "#a3a3a3")],
+            bordercolor=[("disabled", "#d0cec9")],
+        )
+        # Buttons for the next step have a pale blue fill and bold text in
+        # the same blue as the next-step line.
+        style.configure(
+            "Next.TButton", font=("Segoe UI", 10, "bold"),
+            background="#dbe8f5", foreground="#1f4e79",
+            bordercolor="#1f4e79",
+        )
+        style.map(
+            "Next.TButton",
+            background=[("pressed", "#c3d8ee"), ("active", "#e8f0f9")],
+        )
         root.columnconfigure(0, weight=1)
         root.rowconfigure(1, weight=1)
         header = ttk.Frame(root, padding=(20, 15, 20, 12))
@@ -880,22 +906,34 @@ class MainWindow:
         """Grey out buttons that do not apply to the selected request.
 
         New Request is always available. With no request selected, every
-        other button is greyed out.
+        other button is greyed out and New Request is highlighted. The
+        buttons named in the next step are highlighted in pale blue.
         """
         allowed_labels = ["New Request"]
+        highlighted_labels = []
         next_step = NO_REQUEST_STEP
-        if request_id is not None:
+        if request_id is None:
+            highlighted_labels.append("New Request")
+        else:
             try:
                 result = self.app.request_actions(request_id)
             except EXPECTED_ERRORS as error:
-                result = {"actions": [], "next_step": str(error)}
+                result = {
+                    "actions": [], "next_actions": [],
+                    "next_step": str(error),
+                }
             allowed_labels.extend(result["actions"])
+            highlighted_labels.extend(result["next_actions"])
             next_step = result["next_step"]
         for label, button in self.action_buttons.items():
             if label in allowed_labels:
                 button.state(["!disabled"])
             else:
                 button.state(["disabled"])
+            if label in highlighted_labels:
+                button.configure(style="Next.TButton")
+            else:
+                button.configure(style="Action.TButton")
         self.next_step.set(next_step)
 
     def _action(self, action: Callable[[], Any], success: str) -> None:

@@ -53,6 +53,17 @@ class RequestActionTests(unittest.TestCase):
             "Next step: Office Staff - Prepare Quote or Reject Request.",
         )
 
+    def test_next_actions_leave_out_editing(self):
+        result = self.app.request_actions(self.request_id)
+        self.assertEqual(
+            result["next_actions"], ["Prepare Quote", "Reject Request"],
+        )
+
+    def test_closed_request_has_no_next_actions(self):
+        self.app.reject_request(self.request_id, "Cannot fulfil")
+        result = self.app.request_actions(self.request_id)
+        self.assertEqual(result["next_actions"], [])
+
     def test_quoted_request_waits_for_the_customer(self):
         self.app.prepare_quote(self.request_id)
         self.assertEqual(self.actions(), [
@@ -167,12 +178,40 @@ class ActionButtonStateTests(unittest.TestCase):
         ])
         self.assertIn("Office Staff", self.window.next_step.get())
 
+    def highlighted_labels(self):
+        labels = []
+        for label, button in self.window.action_buttons.items():
+            if str(button.cget("style")) == "Next.TButton":
+                labels.append(label)
+        return labels
+
+    def test_new_request_is_highlighted_without_a_selection(self):
+        self.assertEqual(self.highlighted_labels(), ["New Request"])
+
+    def test_next_step_buttons_are_highlighted(self):
+        self.window.request_tree.selection_set(self.request_id)
+        self.window._show_request()
+        self.assertEqual(
+            self.highlighted_labels(), ["Prepare Quote", "Reject Request"],
+        )
+
+    def test_other_buttons_use_the_action_style(self):
+        self.window.request_tree.selection_set(self.request_id)
+        self.window._show_request()
+        for label in ("Edit Customer", "Allocate Worker"):
+            with self.subTest(label=label):
+                button = self.window.action_buttons[label]
+                self.assertEqual(str(button.cget("style")), "Action.TButton")
+
     def test_buttons_follow_the_request_after_an_action(self):
         self.app.prepare_quote(self.request_id)
         self.window.refresh(self.request_id)
         self.assertEqual(self.enabled_labels(), [
             "New Request", "Edit Customer", "Accept Quote", "Decline Quote",
         ])
+        self.assertEqual(
+            self.highlighted_labels(), ["Accept Quote", "Decline Quote"],
+        )
 
 
 if __name__ == "__main__":

@@ -696,7 +696,8 @@ class YowdApplication:
         """Return the allowed actions and the next step for one request.
 
         The result holds "actions", the names of the actions the request
-        accepts now, and "next_step", one line saying who acts next and
+        accepts now, "next_actions", the names of the actions that move the
+        request on, and "next_step", one line saying who acts next and
         which actions they can take.
         """
         request = self._request(request_id)
@@ -710,9 +711,11 @@ class YowdApplication:
             RequestAction.EDIT_CUSTOMER, RequestAction.EDIT_ADDRESSES,
         )
         next_actions = []
+        next_action_names = []
         for action in actions:
             if action not in editing_actions:
                 next_actions.append(action)
+                next_action_names.append(action.value)
         if not next_actions:
             if request.status == RequestStatus.DELIVERED:
                 next_step = "Complete. No further actions are needed."
@@ -727,7 +730,11 @@ class YowdApplication:
             for action in next_actions:
                 names.append(action.value)
             next_step = f"Next step: {role} - {' or '.join(names)}."
-        return {"actions": action_names, "next_step": next_step}
+        return {
+            "actions": action_names,
+            "next_actions": next_action_names,
+            "next_step": next_step,
+        }
 
     def request_details(self, request_id: str) -> str:
         request = self._request(request_id)
